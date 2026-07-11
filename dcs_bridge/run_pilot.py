@@ -333,6 +333,8 @@ def main() -> None:
     except KeyboardInterrupt:
         print("\nAI pilot stopped")
     finally:
+        if voice is not None:
+            voice.close()
         if log_file is not None:
             log_file.close()
         link.close()

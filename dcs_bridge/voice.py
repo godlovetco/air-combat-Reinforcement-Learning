@@ -10,6 +10,7 @@ type transmissions at the ``[RADIO] >`` prompt, replies are printed.
 
 from __future__ import annotations
 
+import queue
 import threading
 from typing import Optional
 
@@ -17,10 +18,14 @@ from typing import Optional
 class VoiceIO:
     def __init__(self, prefer_voice: bool = True, language: str = "ko-KR"):
         self.language = language
-        self._say_lock = threading.Lock()
         self._recognizer = None
         self._microphone = None
         self._tts = None
+        # Speech runs on a dedicated worker so say() never blocks its caller
+        # (the 20 Hz flight loop makes proactive calls; a blocking runAndWait()
+        # there would stall control output and trip the Lua command timeout).
+        self._speech_queue: "queue.Queue[Optional[str]]" = queue.Queue()
+        self._speech_thread: Optional[threading.Thread] = None
 
         if prefer_voice:
             try:
@@ -39,6 +44,10 @@ class VoiceIO:
 
                 self._tts = pyttsx3.init()
                 self._tts.setProperty("rate", 175)
+                self._speech_thread = threading.Thread(
+                    target=self._speech_worker, daemon=True, name="radio-tts"
+                )
+                self._speech_thread.start()
             except Exception as exc:
                 print(f"radio: no TTS ({exc}); replies will be printed only")
 
@@ -69,13 +78,31 @@ class VoiceIO:
         return text or None
 
     def say(self, text: str) -> None:
-        """Speak (and always print) a radio reply. Thread-safe."""
+        """Print a radio reply immediately and queue it to be spoken.
+
+        Non-blocking and thread-safe: the caller (including the 20 Hz flight
+        loop) returns at once while a dedicated worker speaks queued lines
+        serially, so no two calls overlap and control output never stalls.
+        """
         print(f"[RADIO] {text}")
-        if self._tts is not None:
-            with self._say_lock:
-                try:
-                    self._tts.say(text)
-                    self._tts.runAndWait()
-                except Exception as exc:
-                    print(f"radio: TTS error ({exc}); continuing text-only")
-                    self._tts = None
+        if self._speech_thread is not None:
+            self._speech_queue.put(text)
+
+    def _speech_worker(self) -> None:
+        while True:
+            text = self._speech_queue.get()
+            if text is None:  # shutdown sentinel
+                return
+            if self._tts is None:
+                continue
+            try:
+                self._tts.say(text)
+                self._tts.runAndWait()
+            except Exception as exc:
+                print(f"radio: TTS error ({exc}); continuing text-only")
+                self._tts = None
+
+    def close(self) -> None:
+        """Stop the speech worker (best effort)."""
+        if self._speech_thread is not None:
+            self._speech_queue.put(None)
