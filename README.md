@@ -5,6 +5,10 @@ UCAV air-combat maneuver decision by reinforcement learning — now with a
 Digital Combat Simulator.
 
 ```
+ flight lead voice ──STT──▶ LLM radio wingman (Claude) ──orders──┐
+        ▲                                                        ▼
+       TTS ◀──radio replies (brevity calls)──┐   ┌── tactical order state
+                                             │   │  (engage/anchor/vector/break/RTB)
 DCS World ──UDP telemetry──▶ dcs_bridge.run_pilot ──UDP stick/throttle──▶ DCS World
  (Lua Export script)              │
                                   ├─ target trajectory prediction (lead pursuit)
@@ -82,9 +86,53 @@ Useful options:
 | `--log-csv out.csv` | per-tick validation log (positions, aspect angles, range) |
 | `--no-invert-pitch` | flip the pitch-axis sign if the jet pushes instead of pulls |
 
-Safety defaults: weapons release is **off** unless `--weapons` is passed, and
-the Lua script neutralizes the controls and returns the jet to you if the
-Python agent stops sending commands for 1 second.
+Safety defaults: weapons release is **off** unless `--weapons` is passed (or
+the flight lead radios "weapons free"), and the Lua script neutralizes the
+controls and returns the jet to you if the Python agent stops sending
+commands for 1 second.
+
+## LLM radio wingman (voice commands / 음성 명령)
+
+`--radio` puts an LLM-based AI pilot on the net as your wingman ("Viper 2"):
+speak (or type) commands in Korean or English, and it interprets them
+against the live tactical picture, executes the order, and answers with a
+short brevity call over TTS. It also makes proactive calls — "tally",
+"guns", "blind".
+
+```
+pip install anthropic                # + optionally: SpeechRecognition pyaudio pyttsx3
+set ANTHROPIC_API_KEY=sk-ant-...     # your Claude API key
+python -m dcs_bridge.run_pilot --radio --checkpoint checkpoints/ucav_policy.npz
+```
+
+Example net traffic:
+
+```
+lead : "2번기, 우측 브레이크!"          → hard right turn, "2, breaking right!"
+lead : "vector heading 270 angels 15"  → flies 270 at 15,000 ft
+lead : "weapons free"                  → trigger allowed in the gun envelope
+lead : "2, say status"                 → "2 has tally, MiG-29 at 7.5 km, ..."
+lead : "기지로 복귀"                    → RTB to the start point, then anchors
+```
+
+How it works: the transmission plus a live `<situation>` block (own state,
+bandit bearing/range/aspect, mode, weapons state) goes to Claude
+(`claude-opus-4-8` by default, adaptive thinking at low effort for radio
+latency). The model issues orders through a strict `set_order` tool —
+engage / anchor / vector / break left-right / RTB / weapons free-hold —
+which the 20 Hz flight loop executes, and its text reply is spoken back.
+
+| Option | Effect |
+|---|---|
+| `--radio-model claude-opus-4-8` | which Claude model answers the radio |
+| `--radio-lang ko-KR` | speech-recognition language (`en-US`, ...) |
+| `--radio-text-only` | console text radio: no microphone or TTS needed |
+| `--radio-offline` | no API: rule-based brevity parser (KOR/ENG) handles the standard commands |
+
+Without an `ANTHROPIC_API_KEY` the radio automatically drops to the offline
+brevity parser, so voice command always works — the LLM adds free-form
+understanding ("bandit's behind you, get out of there and come home" still
+becomes *break* + *RTB*) and situation-aware replies.
 
 ## Training
 
@@ -118,13 +166,16 @@ engagements (head-on merge ±30° heading, ±800 m altitude offset, equal
 dcs-addon/                Lua export addon for DCS World
   Export.lua                loader stub for Saved Games\DCS\Scripts\
   Scripts/UCAVPilot/        the export script (telemetry out, commands in)
-dcs_bridge/               Python package (numpy only)
+dcs_bridge/               Python package (numpy; anthropic for the radio)
   geometry.py               combat geometry & the legacy 72-dim network input
   policy.py                 Q-network (72→100→30→9), training + inference
   predictor.py              constant-turn-rate target trajectory prediction
   sim_env.py                point-mass 1v1 training environment
   autopilot.py              bank-to-turn inner loop (maneuver → stick axes)
   link.py                   UDP protocol to/from the Lua script
+  orders.py                 tactical orders + thread-safe pilot state
+  wingman.py                LLM radio agent (Claude) + offline brevity parser
+  voice.py                  STT/TTS with console fallback
   train.py                  python -m dcs_bridge.train
   run_pilot.py              python -m dcs_bridge.run_pilot
 checkpoints/              trained policy weights (.npz)

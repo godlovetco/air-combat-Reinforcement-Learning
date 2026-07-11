@@ -4,7 +4,7 @@ Run this on the same machine as DCS (or point ``--dcs-host`` at it) while a
 mission with a player-controlled aircraft is active and the UCAVPilot export
 script is installed::
 
-    python -m dcs_bridge.run_pilot --checkpoint checkpoints/ucav_policy.npz
+    python -m dcs_bridge.run_pilot --checkpoint checkpoints/ucav_policy.npz --radio
 
 Loop, at telemetry rate (~20 Hz, the cadence used for AI-pilot validation in
 DCS by Yoo, Kim & Shim, ICCAS 2021):
@@ -18,6 +18,13 @@ DCS by Yoo, Kim & Shim, ICCAS 2021):
 4. run the bank-to-turn autopilot toward the commanded climb angle,
    heading and speed, and send stick/throttle axes back into DCS.
 
+``--radio`` starts the LLM radio wingman: the flight lead speaks (or types)
+commands in Korean or English; a Claude model turns them into tactical
+orders (engage / anchor / vector / break / RTB / weapons state) and answers
+with a short brevity call over TTS.  The AI also makes proactive calls
+(tally, in guns, blind).  Without an Anthropic API key the radio falls back
+to an offline brevity-code parser.
+
 Without a checkpoint (or with ``--heuristic``) it flies lead pursuit onto
 the predicted intercept point, which is useful for tuning autopilot gains
 before trusting the network.
@@ -25,22 +32,25 @@ before trusting the network.
 ``--log-csv`` writes a per-tick engagement log (positions, aspect angles,
 range, prediction) for post-flight validation analysis and plots.
 
-Weapons release is OFF by default; pass ``--weapons`` to let the pilot pull
-the trigger inside the gun envelope.
+Weapons release is OFF by default; pass ``--weapons`` (or radio
+"weapons free") to let the pilot pull the trigger inside the gun envelope.
 """
 
 from __future__ import annotations
 
 import argparse
+import copy
 import csv
 import math
 import os
+import threading
 import time
 from typing import Optional, Tuple
 
 from . import geometry as geo
 from .autopilot import Autopilot, AutopilotConfig
 from .link import DCSLink, Telemetry
+from .orders import PilotState
 from .policy import QNetwork
 from .predictor import TurnRatePredictor
 
@@ -62,12 +72,11 @@ def bandit_command_estimate(
     return (total, gamma, heading)
 
 
-def steer_to_point(telem: Telemetry, point) -> Tuple[float, float]:
+def steer_to_point(own_pos, point) -> Tuple[float, float]:
     """Maneuver targets (gamma_cmd, psi_cmd) that point the velocity at a point."""
-    own = telem.own
-    dx = point[0] - own.pos[0]
-    dy = point[1] - own.pos[1]
-    dz = point[2] - own.pos[2]
+    dx = point[0] - own_pos[0]
+    dy = point[1] - own_pos[1]
+    dz = point[2] - own_pos[2]
     horiz = math.sqrt(dx * dx + dy * dy)
     psi_cmd = geo.wrap_heading(math.degrees(math.atan2(dx, dy)))
     gamma_cmd = math.degrees(math.atan2(dz, max(horiz, 1.0)))
@@ -78,6 +87,44 @@ def own_gamma(tas: float, vv: float) -> float:
     if tas < 1.0:
         return 0.0
     return math.degrees(math.asin(max(-1.0, min(1.0, vv / tas))))
+
+
+def altitude_hold_gamma(target_alt: Optional[float], current_alt: float) -> float:
+    if target_alt is None:
+        return 0.0
+    return max(-20.0, min(20.0, 0.02 * (target_alt - current_alt)))
+
+
+def start_radio(args, state: PilotState, get_situation) -> Optional["object"]:
+    """Spin up the radio wingman thread; returns the VoiceIO for proactive calls."""
+    from .voice import VoiceIO
+    from .wingman import make_agent
+
+    voice = VoiceIO(prefer_voice=not args.radio_text_only, language=args.radio_lang)
+    agent = make_agent(model=args.radio_model, offline=args.radio_offline)
+
+    def radio_loop() -> None:
+        voice.say("Viper 2, checking in as fragged.")
+        while True:
+            transmission = voice.listen()
+            if not transmission:
+                continue
+            if transmission.lower() in ("quit", "exit"):
+                break
+            try:
+                reply, orders = agent.radio(transmission, get_situation())
+            except Exception as exc:
+                voice.say("2, radio garbled, say again.")
+                print(f"radio: agent error: {exc}")
+                continue
+            for order in orders:
+                state.apply(order)
+                print(f"[RADIO] order applied: {order.describe()}")
+            if reply:
+                voice.say(reply)
+
+    threading.Thread(target=radio_loop, daemon=True, name="radio-wingman").start()
+    return voice
 
 
 def main() -> None:
@@ -98,6 +145,18 @@ def main() -> None:
     )
     ap = Autopilot(AutopilotConfig(invert_pitch=not args.no_invert_pitch))
     predictor = TurnRatePredictor()
+    state = PilotState(weapons_free=args.weapons, target_speed=args.target_speed)
+
+    situation_lock = threading.Lock()
+    latest_situation: dict = {"own": {}, "bandit": None}
+
+    def get_situation() -> dict:
+        with situation_lock:
+            return copy.deepcopy(latest_situation)
+
+    voice = None
+    if args.radio:
+        voice = start_radio(args, state, get_situation)
 
     log_writer = None
     log_file = None
@@ -105,7 +164,7 @@ def main() -> None:
         log_file = open(args.log_csv, "w", newline="")
         log_writer = csv.writer(log_file)
         log_writer.writerow(
-            ["t", "x_r", "y_r", "z_r", "x_b", "y_b", "z_b",
+            ["t", "mode", "x_r", "y_r", "z_r", "x_b", "y_b", "z_b",
              "q_r", "q_b", "range", "gamma_cmd", "psi_cmd", "trigger"]
         )
 
@@ -113,11 +172,14 @@ def main() -> None:
     have_cmd = False
     last_decision = -1e9
     last_log = 0.0
+    had_bandit = False
+    called_guns = False
 
     print(
         f"listening for DCS telemetry on udp/{args.telemetry_port}, "
         f"sending commands to {args.dcs_host}:{args.command_port} "
-        f"(weapons {'ENABLED' if args.weapons else 'disabled'})"
+        f"(weapons {'ENABLED' if args.weapons else 'disabled'}, "
+        f"radio {'on' if args.radio else 'off'})"
     )
     try:
         while True:
@@ -129,6 +191,7 @@ def main() -> None:
                 continue
 
             own = telem.own
+            state.set_home(own.pos)
             g_own = own_gamma(own.tas, own.vv)
             if not have_cmd:
                 gamma_cmd, psi_cmd = g_own, own.heading
@@ -136,6 +199,7 @@ def main() -> None:
 
             trigger = 0
             feats = None
+            act_b = None
             if telem.bandit is not None:
                 predictor.update(telem.t, telem.bandit.pos)
                 act_b = bandit_command_estimate(predictor, telem)
@@ -144,8 +208,62 @@ def main() -> None:
                     list(telem.bandit.pos), list(act_b),
                 )
 
-            if telem.bandit is None:
-                # No hostile airborne: hold altitude in a gentle right orbit.
+            # ---- radio: shared situation + proactive calls ---------------
+            snap = state.snapshot()
+            with situation_lock:
+                latest_situation["own"] = {
+                    "altitude_m": round(own.pos[2]),
+                    "heading_deg": round(own.heading),
+                    "speed_ms": round(own.tas),
+                }
+                latest_situation["mode"] = snap["mode"]
+                latest_situation["weapons_free"] = snap["weapons_free"]
+                latest_situation["bandit"] = None
+                if telem.bandit is not None and feats is not None:
+                    bearing = geo.wrap_heading(math.degrees(math.atan2(
+                        telem.bandit.pos[0] - own.pos[0],
+                        telem.bandit.pos[1] - own.pos[1],
+                    )))
+                    latest_situation["bandit"] = {
+                        "name": telem.bandit.name,
+                        "range_km": round(feats[2] / 1000.0, 1),
+                        "bearing_deg": round(bearing),
+                        "own_aspect_deg": round(feats[0]),
+                        "altitude_m": round(telem.bandit.pos[2]),
+                    }
+
+            if voice is not None:
+                if telem.bandit is not None and not had_bandit:
+                    voice.say(f"2, tally {telem.bandit.name}, "
+                              f"{math.dist(own.pos, telem.bandit.pos) / 1000.0:.0f} kilometers.")
+                elif telem.bandit is None and had_bandit:
+                    voice.say("2 is blind.")
+                    called_guns = False
+            had_bandit = telem.bandit is not None
+
+            # ---- maneuver decision ---------------------------------------
+            if snap["pending_break"]:
+                state.resolve_break(own.heading)
+                snap = state.snapshot()
+            mode = snap["mode"]
+
+            if mode == "vector" and snap["vector_heading"] is not None:
+                psi_cmd = snap["vector_heading"]
+                gamma_cmd = altitude_hold_gamma(snap["vector_altitude"], own.pos[2])
+            elif mode == "anchor":
+                if telem.t - last_decision >= args.decision_period:
+                    last_decision = telem.t
+                    psi_cmd = geo.wrap_heading(own.heading + 20.0)
+                gamma_cmd = 0.0
+            elif mode == "rtb":
+                home = state.home
+                if home is not None:
+                    if math.dist(own.pos, home) < 2_000.0:
+                        state.apply_anchor_arrival()
+                    else:
+                        gamma_cmd, psi_cmd = steer_to_point(own.pos, home)
+            elif telem.bandit is None:
+                # engage with no hostile airborne: gentle right orbit
                 gamma_cmd = 0.0
                 psi_cmd = geo.wrap_heading(own.heading + 15.0)
             elif telem.t - last_decision >= args.decision_period:
@@ -166,11 +284,15 @@ def main() -> None:
                     psi_cmd = geo.wrap_heading(psi_cmd + d_psi)
                 else:
                     aim = lead if lead is not None else telem.bandit.pos
-                    gamma_cmd, psi_cmd = steer_to_point(telem, aim)
+                    gamma_cmd, psi_cmd = steer_to_point(own.pos, aim)
 
-            if args.weapons and feats is not None:
+            # ---- weapons --------------------------------------------------
+            if snap["weapons_free"] and mode == "engage" and feats is not None:
                 if feats[2] < GUN_RANGE and feats[0] < GUN_ASPECT:
                     trigger = 1
+                    if voice is not None and not called_guns:
+                        voice.say("2, guns.")
+                        called_guns = True
 
             controls = ap.command(
                 t=telem.t,
@@ -180,7 +302,7 @@ def main() -> None:
                 tas=own.tas,
                 gamma_cmd_deg=gamma_cmd,
                 psi_cmd_deg=psi_cmd,
-                v_cmd=args.target_speed,
+                v_cmd=snap["target_speed"],
             )
             controls.trigger = trigger
             link.send(controls)
@@ -188,7 +310,7 @@ def main() -> None:
             if log_writer is not None:
                 b = telem.bandit
                 log_writer.writerow([
-                    round(telem.t, 3), *[round(v, 1) for v in own.pos],
+                    round(telem.t, 3), mode, *[round(v, 1) for v in own.pos],
                     *([round(v, 1) for v in b.pos] if b else ["", "", ""]),
                     round(feats[0], 2) if feats else "",
                     round(feats[1], 2) if feats else "",
@@ -203,8 +325,8 @@ def main() -> None:
                     d = math.dist(own.pos, telem.bandit.pos)
                     bandit_txt = f"{telem.bandit.name} @ {d/1000.0:.1f} km"
                 print(
-                    f"t={telem.t:8.1f}  tas={own.tas:5.1f}  alt={own.pos[2]:6.0f}  "
-                    f"hdg={own.heading:5.1f}->{psi_cmd:5.1f}  "
+                    f"t={telem.t:8.1f}  mode={mode:<7}  tas={own.tas:5.1f}  "
+                    f"alt={own.pos[2]:6.0f}  hdg={own.heading:5.1f}->{psi_cmd:5.1f}  "
                     f"gamma={g_own:5.1f}->{gamma_cmd:5.1f}  bandit: {bandit_txt}"
                     + ("  FIRING" if trigger else "")
                 )
@@ -234,6 +356,18 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--dcs-host", default="127.0.0.1")
     p.add_argument("--no-invert-pitch", action="store_true",
                    help="do not invert the pitch axis sign sent to DCS")
+
+    radio = p.add_argument_group("radio wingman (LLM voice commands)")
+    radio.add_argument("--radio", action="store_true",
+                       help="enable the voice/text radio wingman")
+    radio.add_argument("--radio-model", default="claude-opus-4-8",
+                       help="Claude model for the radio agent")
+    radio.add_argument("--radio-lang", default="ko-KR",
+                       help="speech recognition language (e.g. ko-KR, en-US)")
+    radio.add_argument("--radio-offline", action="store_true",
+                       help="skip the LLM and use the rule-based brevity parser")
+    radio.add_argument("--radio-text-only", action="store_true",
+                       help="console text radio (no microphone / TTS)")
     return p
 
 
