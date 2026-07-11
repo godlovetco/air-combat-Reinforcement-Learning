@@ -84,6 +84,16 @@ Useful options:
 | `--decision-period 0.5` | seconds between policy decisions |
 | `--target-speed 250` | TAS in m/s the throttle loop holds |
 | `--log-csv out.csv` | per-tick validation log (positions, aspect angles, range) |
+
+After a flight, analyze the log the way the paper does its validation:
+
+```
+python -m dcs_bridge.flight_report flight_01.csv --plot flight_01.png
+```
+
+prints engagement statistics (min/mean range, tracking fraction, time to
+first gun solution, mode timeline) and renders trajectory / range / aspect /
+altitude plots (matplotlib required only for `--plot`).
 | `--no-invert-pitch` | flip the pitch-axis sign if the jet pushes instead of pulls |
 
 Safety defaults: weapons release is **off** unless `--weapons` is passed (or
@@ -176,6 +186,7 @@ dcs_bridge/               Python package (numpy; anthropic for the radio)
   orders.py                 tactical orders + thread-safe pilot state
   wingman.py                LLM radio agent (Claude) + offline brevity parser
   voice.py                  STT/TTS with console fallback
+  flight_report.py          post-flight validation stats and plots
   train.py                  python -m dcs_bridge.train
   run_pilot.py              python -m dcs_bridge.run_pilot
 checkpoints/              trained policy weights (.npz)
