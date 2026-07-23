@@ -14,6 +14,10 @@ DCS -> Python (default port 7778): one JSON object per datagram, produced by
       },
       "bandit": {                        -- omitted when no hostile airborne
         "name": "...", "px": E, "py": N, "pz": U, "heading": deg, "pitch": deg
+      },
+      "lead": {                          -- omitted when no friendly lead airborne
+        "name": "...", "px": E, "py": N, "pz": U, "heading": deg, "pitch": deg,
+        "tas": m/s                       -- crewed flight lead the CCA teams with
       }
     }
 
@@ -55,6 +59,7 @@ class Contact:
     pos: Tuple[float, float, float]
     heading: float
     pitch: float
+    tas: Optional[float] = None  # m/s, known for the friendly lead (datalink)
 
 
 @dataclass
@@ -62,6 +67,7 @@ class Telemetry:
     t: float
     own: Ownship
     bandit: Optional[Contact]
+    lead: Optional[Contact] = None  # crewed flight lead for MUM-T / CCA teaming
 
 
 def parse_telemetry(payload: bytes) -> Telemetry:
@@ -76,16 +82,25 @@ def parse_telemetry(payload: bytes) -> Telemetry:
         tas=float(o["tas"]),
         vv=float(o["vv"]),
     )
-    bandit = None
-    b = data.get("bandit")
-    if b:
-        bandit = Contact(
-            name=b.get("name", "?"),
-            pos=(float(b["px"]), float(b["py"]), float(b["pz"])),
-            heading=float(b.get("heading", 0.0)),
-            pitch=float(b.get("pitch", 0.0)),
-        )
-    return Telemetry(t=float(data["t"]), own=own, bandit=bandit)
+    return Telemetry(
+        t=float(data["t"]),
+        own=own,
+        bandit=_parse_contact(data.get("bandit")),
+        lead=_parse_contact(data.get("lead")),
+    )
+
+
+def _parse_contact(c: Optional[dict]) -> Optional[Contact]:
+    if not c:
+        return None
+    tas = c.get("tas")
+    return Contact(
+        name=c.get("name", "?"),
+        pos=(float(c["px"]), float(c["py"]), float(c["pz"])),
+        heading=float(c.get("heading", 0.0)),
+        pitch=float(c.get("pitch", 0.0)),
+        tas=None if tas is None else float(tas),
+    )
 
 
 def format_command(c: Controls) -> bytes:

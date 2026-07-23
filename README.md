@@ -8,9 +8,11 @@ Digital Combat Simulator.
  flight lead voice ──STT──▶ LLM radio wingman (Claude) ──orders──┐
         ▲                                                        ▼
        TTS ◀──radio replies (brevity calls)──┐   ┌── tactical order state
-                                             │   │  (engage/anchor/vector/break/RTB)
+                                             │   │  (engage/anchor/vector/break/
+                                             │   │   RTB/formation/scout/leash)
 DCS World ──UDP telemetry──▶ dcs_bridge.run_pilot ──UDP stick/throttle──▶ DCS World
  (Lua Export script)              │
+ own + bandit + lead datalink     ├─ CCA loyal-wingman teaming (formation on lead)
                                   ├─ target trajectory prediction (lead pursuit)
                                   ├─ Q-network maneuver decision (9 actions, 2 Hz)
                                   └─ bank-to-turn autopilot (20 Hz)
@@ -144,6 +146,50 @@ brevity parser, so voice command always works — the LLM adds free-form
 understanding ("bandit's behind you, get out of there and come home" still
 becomes *break* + *RTB*) and situation-aware replies.
 
+## CCA loyal-wingman teaming (MUM-T)
+
+Modeled on the U.S. Air Force **Collaborative Combat Aircraft (CCA)**
+program: instead of free-engaging alone, the UCAV flies as an uncrewed
+"loyal wingman" on a **crewed flight lead**, holding tactical formation and
+committing on threats under *supervised autonomy* — the human sets how long
+the leash is, the drone flies the details.
+
+The Lua export reports the nearest friendly aircraft as the flight lead
+(`lead` datalink object); the flight loop stations the UCAV on it and paces
+its speed to hold position.
+
+```
+python -m dcs_bridge.run_pilot --formation combat_spread --leash tight \
+       --radio --checkpoint checkpoints/ucav_policy.npz
+```
+
+**Formations** (`--formation`, or radio "combat spread", "line abreast",
+"fighting wing", "wedge", "echelon", "wall", "trail"; `--formation-side
+left|right`) are the standard two-ship geometries relative to the lead's
+nose. **Scout** (radio "push"/"scout") sends the UCAV ahead of the lead to
+sweep.
+
+**Leash** (`--leash`, or radio "close/tight/loose leash", "weapons tight")
+is the supervised-autonomy level:
+
+| Leash | Behavior |
+|---|---|
+| `close` | station-keeping only; weapons caged, never leaves formation |
+| `tight` (default) | auto-commits on a bandit inside `--commit-range` (15 km) but holds fire until the lead calls weapons free |
+| `loose` | auto-commits **and** fires in the gun envelope on its own |
+
+When the threat opens beyond `--rejoin-range` (25 km) the UCAV rejoins
+formation on its own. Proactive radio calls mark the transitions:
+"2, in formation" / "2, committing" / "2, rejoining".
+
+```
+lead : "2, combat spread, right side"   → stations abeam-high on the right
+lead : "you're tight"                    → may commit, weapons stay caged
+lead : "2, weapons free"                 → cleared to fire on its commit
+lead : "push ahead and scout"            → runs 5 km in front to sweep
+lead : "편대 복귀"                        → rejoins formation
+```
+
 ## Training
 
 ```
@@ -180,6 +226,7 @@ dcs_bridge/               Python package (numpy; anthropic for the radio)
   geometry.py               combat geometry & the legacy 72-dim network input
   policy.py                 Q-network (72→100→30→9), training + inference
   predictor.py              constant-turn-rate target trajectory prediction
+  formation.py              CCA loyal-wingman formation station-keeping (MUM-T)
   sim_env.py                point-mass 1v1 training environment
   autopilot.py              bank-to-turn inner loop (maneuver → stick axes)
   link.py                   UDP protocol to/from the Lua script

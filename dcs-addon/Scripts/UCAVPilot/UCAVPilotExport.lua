@@ -101,6 +101,35 @@ local function findBandit(selfData)
     return best
 end
 
+-- Nearest friendly (same-coalition) aircraft other than the player: the crewed
+-- flight lead a CCA loyal wingman teams with (manned-unmanned teaming).
+local function findFriendlyLead(selfData)
+    local objects = LoGetWorldObjects("units")
+    if not objects then return nil end
+    local ownId = LoGetPlayerPlaneId()
+    local own = ownId and objects[ownId] or nil
+    local ownCoalition = own and own.CoalitionID or nil
+    if not ownCoalition then return nil end
+    local sx, sy, sz = selfData.Position.x, selfData.Position.y, selfData.Position.z
+
+    local best, bestDist = nil, math.huge
+    for id, obj in pairs(objects) do
+        if id ~= ownId
+            and obj.Type
+            and obj.Type.level1 == 1  -- fixed-wing aircraft only
+            and obj.CoalitionID == ownCoalition then
+            local dx = obj.Position.x - sx
+            local dy = obj.Position.y - sy
+            local dz = obj.Position.z - sz
+            local dist = dx * dx + dy * dy + dz * dz
+            if dist < bestDist then
+                best, bestDist = obj, dist
+            end
+        end
+    end
+    return best
+end
+
 local function sendTelemetry()
     local selfData = LoGetSelfData()
     if not selfData then return end
@@ -121,8 +150,19 @@ local function sendTelemetry()
             bx, by, bz, deg(bandit.Heading), deg(bandit.Pitch))
     end
 
+    local leadJson = ""
+    local lead = findFriendlyLead(selfData)
+    if lead then
+        local lx, ly, lz = enu(lead.Position)
+        leadJson = string.format(
+            ',"lead":{"name":"%s","px":%.2f,"py":%.2f,"pz":%.2f,"heading":%.3f,"pitch":%.3f}',
+            string.gsub(lead.Name or "?", '[\\"]', "_"),
+            lx, ly, lz, deg(lead.Heading), deg(lead.Pitch))
+    end
+
     local packet = string.format(
-        '{"t":%.3f,"own":%s%s}', num(LoGetModelTime() or 0), ownJson, banditJson)
+        '{"t":%.3f,"own":%s%s%s}',
+        num(LoGetModelTime() or 0), ownJson, banditJson, leadJson)
     sendSock:sendto(packet, UCAV.HOST, UCAV.TELEMETRY_PORT)
 end
 

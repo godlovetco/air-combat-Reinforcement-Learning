@@ -33,6 +33,25 @@ whatever jet you occupy.
    straight-flying opponent the policy was trained against; CAP makes it
    fight back).
 
+## 2b. A crewed flight lead (for CCA loyal-wingman teaming)
+
+To fly the `--formation` / `--leash` MUM-T modes, the mission needs a
+**friendly aircraft for the UCAV to team with** — the crewed flight lead:
+
+1. Add a second aircraft of **your own coalition**, air start, co-altitude,
+   a few km from the player. An AI wingman on a simple flight plan (racetrack
+   or a route) works well as the "lead" the UCAV stations on.
+2. The export script reports the nearest same-coalition aircraft as the
+   `lead` datalink contact; no extra setup is needed on the DCS side.
+3. Fly the UCAV (the player jet) with e.g.
+   `--formation combat_spread --leash tight`; it will rejoin and hold station
+   on that aircraft, auto-commit on bandits inside 15 km, and rejoin when
+   they open past 25 km. Radio "close/tight/loose leash" changes the
+   autonomy level in flight.
+
+If no friendly aircraft is airborne, the UCAV simply holds with a gentle
+orbit until a lead appears.
+
 ## 3. Rules of engagement for testing
 
 - Start with `--heuristic --radio-text-only` and weapons off to verify the

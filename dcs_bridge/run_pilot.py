@@ -47,15 +47,29 @@ import threading
 import time
 from typing import Optional, Tuple
 
+from . import formation as form
 from . import geometry as geo
 from .autopilot import Autopilot, AutopilotConfig
-from .link import DCSLink, Telemetry
+from .link import Contact, DCSLink, Telemetry
 from .orders import PilotState
 from .policy import QNetwork
 from .predictor import TurnRatePredictor
 
 GUN_RANGE = 1_200.0   # m, trigger envelope
 GUN_ASPECT = 4.0      # deg
+
+
+def lead_speed_estimate(
+    predictor: TurnRatePredictor, lead: Contact, fallback: float
+) -> float:
+    """Best available TAS for the crewed lead: datalink value, else track fit."""
+    if lead.tas is not None:
+        return lead.tas
+    state = predictor.motion_state()
+    if state is not None:
+        _, speed, _, _, climb = state
+        return math.hypot(speed, climb)
+    return fallback
 
 
 def bandit_command_estimate(
@@ -145,10 +159,18 @@ def main() -> None:
     )
     ap = Autopilot(AutopilotConfig(invert_pitch=not args.no_invert_pitch))
     predictor = TurnRatePredictor()
-    state = PilotState(weapons_free=args.weapons, target_speed=args.target_speed)
+    lead_predictor = TurnRatePredictor()
+    state = PilotState(
+        weapons_free=args.weapons,
+        target_speed=args.target_speed,
+        mode="formation" if args.formation else "engage",
+        formation_station=args.formation or "combat_spread",
+        formation_side=args.formation_side,
+        leash=args.leash,
+    )
 
     situation_lock = threading.Lock()
-    latest_situation: dict = {"own": {}, "bandit": None}
+    latest_situation: dict = {"own": {}, "bandit": None, "lead": None}
 
     def get_situation() -> dict:
         with situation_lock:
@@ -174,12 +196,15 @@ def main() -> None:
     last_log = 0.0
     had_bandit = False
     called_guns = False
+    in_formation_called = False
 
     print(
         f"listening for DCS telemetry on udp/{args.telemetry_port}, "
         f"sending commands to {args.dcs_host}:{args.command_port} "
         f"(weapons {'ENABLED' if args.weapons else 'disabled'}, "
-        f"radio {'on' if args.radio else 'off'})"
+        f"radio {'on' if args.radio else 'off'}, "
+        + (f"formation {args.formation} on lead, leash {args.leash})"
+           if args.formation else f"free engage, leash {args.leash})")
     )
     try:
         while True:
@@ -207,6 +232,18 @@ def main() -> None:
                     list(own.pos), [own.tas, g_own, own.heading],
                     list(telem.bandit.pos), list(act_b),
                 )
+            if telem.lead is not None:
+                lead_predictor.update(telem.t, telem.lead.pos)
+
+            # ---- supervised autonomy: leash-gated commit / rejoin --------
+            bandit_range = feats[2] if feats is not None else None
+            if state.auto_commit(bandit_range is not None and bandit_range <= args.commit_range):
+                if voice is not None:
+                    voice.say("2, committing.")
+                in_formation_called = False
+            if state.auto_rejoin(bandit_range is None or bandit_range > args.rejoin_range):
+                if voice is not None:
+                    voice.say("2, rejoining.")
 
             # ---- radio: shared situation + proactive calls ---------------
             snap = state.snapshot()
@@ -218,6 +255,14 @@ def main() -> None:
                 }
                 latest_situation["mode"] = snap["mode"]
                 latest_situation["weapons_free"] = snap["weapons_free"]
+                latest_situation["leash"] = snap["leash"]
+                latest_situation["formation"] = snap["formation_station"]
+                latest_situation["lead"] = None
+                if telem.lead is not None:
+                    latest_situation["lead"] = {
+                        "name": telem.lead.name,
+                        "range_km": round(math.dist(own.pos, telem.lead.pos) / 1000.0, 1),
+                    }
                 latest_situation["bandit"] = None
                 if telem.bandit is not None and feats is not None:
                     bearing = geo.wrap_heading(math.degrees(math.atan2(
@@ -246,6 +291,7 @@ def main() -> None:
                 state.resolve_break(own.heading)
                 snap = state.snapshot()
             mode = snap["mode"]
+            speed_cmd = snap["target_speed"]
 
             if mode == "vector" and snap["vector_heading"] is not None:
                 psi_cmd = snap["vector_heading"]
@@ -262,6 +308,30 @@ def main() -> None:
                         state.apply_anchor_arrival()
                     else:
                         gamma_cmd, psi_cmd = steer_to_point(own.pos, home)
+            elif mode in ("formation", "scout"):
+                lead_c = telem.lead
+                if lead_c is not None:
+                    if mode == "formation":
+                        aim = form.station_position(
+                            lead_c.pos, lead_c.heading,
+                            snap["formation_station"], snap["formation_side"],
+                        )
+                        lead_spd = lead_speed_estimate(lead_predictor, lead_c, own.tas)
+                        speed_cmd = form.formation_speed(
+                            lead_spd, own.pos, aim, lead_c.heading)
+                        if voice is not None and form.in_position(own.pos, aim):
+                            if not in_formation_called:
+                                voice.say("2, in formation.")
+                                in_formation_called = True
+                        else:
+                            in_formation_called = False
+                    else:  # scout
+                        aim = form.scout_position(lead_c.pos, lead_c.heading)
+                    gamma_cmd, psi_cmd = steer_to_point(own.pos, aim)
+                else:
+                    # no lead datalink yet: hold with a gentle right orbit
+                    gamma_cmd = 0.0
+                    psi_cmd = geo.wrap_heading(own.heading + 15.0)
             elif telem.bandit is None:
                 # engage with no hostile airborne: gentle right orbit
                 gamma_cmd = 0.0
@@ -302,7 +372,7 @@ def main() -> None:
                 tas=own.tas,
                 gamma_cmd_deg=gamma_cmd,
                 psi_cmd_deg=psi_cmd,
-                v_cmd=snap["target_speed"],
+                v_cmd=speed_cmd,
             )
             controls.trigger = trigger
             link.send(controls)
@@ -358,6 +428,23 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--dcs-host", default="127.0.0.1")
     p.add_argument("--no-invert-pitch", action="store_true",
                    help="do not invert the pitch axis sign sent to DCS")
+
+    cca = p.add_argument_group("CCA loyal-wingman teaming (MUM-T)")
+    cca.add_argument("--formation", nargs="?", const=form.DEFAULT_FORMATION,
+                     default=None, choices=sorted(form.FORMATIONS),
+                     help="start holding this formation on the crewed flight "
+                          "lead instead of free engaging (bare flag = "
+                          f"{form.DEFAULT_FORMATION})")
+    cca.add_argument("--formation-side", default="right", choices=["left", "right"],
+                     help="which side of the lead to hold station on")
+    cca.add_argument("--leash", default="tight", choices=["close", "tight", "loose"],
+                     help="supervised-autonomy level: close=formation only, "
+                          "tight=auto-commit but weapons held, "
+                          "loose=auto-commit weapons free")
+    cca.add_argument("--commit-range", type=float, default=15_000.0,
+                     help="m; leave formation to engage a bandit inside this range")
+    cca.add_argument("--rejoin-range", type=float, default=25_000.0,
+                     help="m; rejoin formation when the bandit is beyond this range")
 
     radio = p.add_argument_group("radio wingman (LLM voice commands)")
     radio.add_argument("--radio", action="store_true",

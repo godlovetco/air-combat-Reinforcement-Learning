@@ -36,6 +36,25 @@ class ProtocolTest(unittest.TestCase):
     def test_parse_without_bandit(self):
         telem = parse_telemetry(make_packet(1.0, bandit=False))
         self.assertIsNone(telem.bandit)
+        self.assertIsNone(telem.lead)
+
+    def test_parse_lead_datalink(self):
+        data = json.loads(make_packet(2.0, bandit=False).decode())
+        data["lead"] = {
+            "name": "Viper 1", "px": 100.0, "py": 200.0, "pz": 3000.0,
+            "heading": 30.0, "pitch": 1.0, "tas": 255.0,
+        }
+        telem = parse_telemetry(json.dumps(data).encode())
+        self.assertIsNotNone(telem.lead)
+        self.assertEqual(telem.lead.name, "Viper 1")
+        self.assertEqual(telem.lead.pos, (100.0, 200.0, 3000.0))
+        self.assertEqual(telem.lead.tas, 255.0)
+
+    def test_lead_tas_optional(self):
+        data = json.loads(make_packet(2.0, bandit=False).decode())
+        data["lead"] = {"name": "Eagle", "px": 0.0, "py": 0.0, "pz": 3000.0}
+        telem = parse_telemetry(json.dumps(data).encode())
+        self.assertIsNone(telem.lead.tas)
 
     def test_format_command_matches_lua_pattern(self):
         line = format_command(

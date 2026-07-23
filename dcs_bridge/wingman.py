@@ -21,7 +21,8 @@ import json
 import re
 from typing import List, Optional, Tuple
 
-from .orders import ORDER_TYPES, TacticalOrder
+from .formation import FORMATIONS
+from .orders import LEASH_LEVELS, ORDER_TYPES, TacticalOrder
 
 DEFAULT_MODEL = "claude-opus-4-8"
 MAX_HISTORY_TURNS = 12  # rolling window of lead/wingman exchanges
@@ -32,14 +33,28 @@ You are "Viper 2", an AI wingman pilot flying an unmanned combat aircraft
 lead ("Viper 1"). You receive each transmission together with a <situation>
 block describing your live tactical picture.
 
+You are a Collaborative Combat Aircraft (CCA): a "loyal wingman" that teams
+with the crewed lead under supervised autonomy. You can fly formation on the
+lead, scout ahead, engage threats, and change your own "leash" only when told.
+
 Rules of engagement:
 - When the lead gives a maneuver or weapons instruction, call the set_order
   tool with the matching order, then acknowledge in ONE short radio call
   using standard brevity (e.g. "2, engaging", "2, breaking right",
-  "2 is anchored", "2, weapons hold").
+  "2 is anchored", "2, weapons hold", "2, in the spread").
 - "break"/"브레이크" is defensive and urgent: acknowledge tersely.
+- Formation / teaming orders:
+  * "form up", "rejoin", "combat spread", "line abreast", "fighting wing",
+    "wedge", etc. -> order "formation" with the matching "station" name and,
+    if given, "side" (left/right). "rejoin"/"편대 복귀" -> order "rejoin".
+  * "push", "scout ahead", "sweep" -> order "scout".
+  * A leash change ("weapons tight", "you're loose", "hold the leash",
+    "close/tight/loose leash") -> order "leash" with the "leash" level.
+    close = formation only, tight = commit but hold fire, loose = commit and
+    fire on your own.
 - For a status request, do not call the tool; read the situation block and
-  give a concise picture report (bandit bearing/range/aspect, own state).
+  give a concise picture report (bandit bearing/range/aspect, own state,
+  formation and leash).
 - If a transmission is ambiguous or requests something you cannot do,
   say so briefly on the radio instead of guessing an order.
 - Reply in the language the lead used (Korean or English). Keep replies
@@ -75,8 +90,24 @@ SET_ORDER_TOOL = {
                 "type": ["number", "null"],
                 "description": "Commanded speed in m/s, if the lead gave one.",
             },
+            "station": {
+                "type": ["string", "null"],
+                "enum": sorted(FORMATIONS) + [None],
+                "description": "Formation name for a 'formation' order.",
+            },
+            "side": {
+                "type": ["string", "null"],
+                "enum": ["left", "right", None],
+                "description": "Which side of the lead to hold station on.",
+            },
+            "leash": {
+                "type": ["string", "null"],
+                "enum": list(LEASH_LEVELS) + [None],
+                "description": "Supervised-autonomy level for a 'leash' order.",
+            },
         },
-        "required": ["order", "heading_deg", "altitude_m", "speed_ms"],
+        "required": ["order", "heading_deg", "altitude_m", "speed_ms",
+                     "station", "side", "leash"],
         "additionalProperties": False,
     },
 }
@@ -192,8 +223,26 @@ _ACK = {
     "rtb": "2, returning to base.",
     "weapons_free": "2, weapons free.",
     "weapons_hold": "2, weapons hold.",
+    "scout": "2, pushing ahead.",
     "status": "",
 }
+
+# formation station name -> matching regex (English + Korean)
+_FORMATION_PATTERNS = [
+    ("line_abreast",  r"line\s*abreast|횡대"),
+    ("combat_spread", r"combat\s*spread|\bspread\b|전투\s*전개|컴뱃\s*스프레드"),
+    ("wall",          r"\bwall\b|월\b"),
+    ("fighting_wing", r"fighting\s*wing|파이팅\s*윙|밀집"),
+    ("echelon",       r"echelon|사다리꼴|제형"),
+    ("wedge",         r"\bwedge\b|쐐기|웨지"),
+    ("trail",         r"\btrail\b|종대|트레일"),
+]
+
+_LEASH_PATTERNS = [
+    ("loose", r"\bloose\b|weapons?\s*free\s*leash|풀어|루즈"),
+    ("close", r"\bclose\s*leash|묶어|근접\s*(리쉬|편대\s*유지)|클로스"),
+    ("tight", r"\btight\b|weapons?\s*tight|타이트"),
+]
 
 
 class BrevityParser:
@@ -212,6 +261,26 @@ class BrevityParser:
             order = TacticalOrder("vector", heading_deg=heading, altitude_m=altitude)
             return (f"2, coming to heading {heading:03.0f}.", [order])
 
+        # leash change: check before weapons/formation so "weapons tight" wins
+        for level, pattern in _LEASH_PATTERNS:
+            if re.search(pattern, text):
+                return (f"2, {level} leash.", [TacticalOrder("leash", leash=level)])
+
+        # formation / rejoin / scout (CCA teaming)
+        side = None
+        if re.search(r"\bleft\b|좌측|왼", text):
+            side = "left"
+        elif re.search(r"\bright\b|우측|오른", text):
+            side = "right"
+        for name, pattern in _FORMATION_PATTERNS:
+            if re.search(pattern, text):
+                return (f"2, {name.replace('_', ' ')}.",
+                        [TacticalOrder("formation", station=name, side=side)])
+        if re.search(r"rejoin|form\s*up|편대\s*복귀|합류|재결합", text):
+            return ("2, rejoining.", [TacticalOrder("rejoin", side=side)])
+        if re.search(r"\bscout\b|\bpush\b|\bsweep\b|정찰|전진|스카웃", text):
+            return (_ACK["scout"], [TacticalOrder("scout")])
+
         for pattern, name in _BREVITY_RULES:
             if re.search(pattern, text):
                 if name == "status":
@@ -223,13 +292,16 @@ class BrevityParser:
     def _status_report(situation: dict) -> str:
         bandit = situation.get("bandit")
         own = situation.get("own", {})
+        mode = situation.get("mode")
+        tail = f" {mode}." if mode in ("formation", "scout") else ""
         if bandit:
             return (
                 f"2 has tally, {bandit.get('name', 'bandit')} at "
                 f"{bandit.get('range_km', '?')} kilometers, own altitude "
-                f"{own.get('altitude_m', 0):.0f} meters."
+                f"{own.get('altitude_m', 0):.0f} meters.{tail}"
             )
-        return f"2 is clean, altitude {own.get('altitude_m', 0):.0f} meters."
+        return (f"2 is clean, altitude {own.get('altitude_m', 0):.0f} meters."
+                f"{tail}")
 
 
 def make_agent(model: str = DEFAULT_MODEL, offline: bool = False):

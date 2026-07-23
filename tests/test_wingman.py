@@ -59,6 +59,38 @@ class BrevityParserTest(unittest.TestCase):
         self.assertEqual(orders, [])
         self.assertIn("say again", reply.lower())
 
+    def test_cca_formation_commands(self):
+        _, orders = self.parser.radio("2, combat spread right side", SITUATION)
+        self.assertEqual(orders[0].order, "formation")
+        self.assertEqual(orders[0].station, "combat_spread")
+        self.assertEqual(orders[0].side, "right")
+
+        _, orders = self.parser.radio("go line abreast on my left", SITUATION)
+        self.assertEqual(orders[0].station, "line_abreast")
+        self.assertEqual(orders[0].side, "left")
+
+    def test_cca_rejoin_and_scout(self):
+        _, orders = self.parser.radio("2, rejoin", SITUATION)
+        self.assertEqual(orders[0].order, "rejoin")
+        _, orders = self.parser.radio("push ahead and scout", SITUATION)
+        self.assertEqual(orders[0].order, "scout")
+
+    def test_cca_leash_beats_weapons_tight(self):
+        # "weapons tight" is a leash change, not a weapons_hold order.
+        _, orders = self.parser.radio("2, weapons tight", SITUATION)
+        self.assertEqual(orders[0].order, "leash")
+        self.assertEqual(orders[0].leash, "tight")
+        _, orders = self.parser.radio("you're loose", SITUATION)
+        self.assertEqual(orders[0].leash, "loose")
+
+    def test_cca_korean_commands(self):
+        _, orders = self.parser.radio("전투 전개 대형으로", SITUATION)
+        self.assertEqual(orders[0].station, "combat_spread")
+        _, orders = self.parser.radio("편대 복귀하라", SITUATION)
+        self.assertEqual(orders[0].order, "rejoin")
+        _, orders = self.parser.radio("정찰 전진", SITUATION)
+        self.assertEqual(orders[0].order, "scout")
+
 
 class PilotStateTest(unittest.TestCase):
     def test_engage_and_weapons(self):
@@ -99,6 +131,55 @@ class PilotStateTest(unittest.TestCase):
     def test_invalid_order_rejected(self):
         with self.assertRaises(ValueError):
             TacticalOrder("self_destruct")
+
+    def test_invalid_side_and_leash_rejected(self):
+        with self.assertRaises(ValueError):
+            TacticalOrder("formation", side="up")
+        with self.assertRaises(ValueError):
+            TacticalOrder("leash", leash="strangle")
+
+
+class CCATeamingTest(unittest.TestCase):
+    def test_formation_order_sets_station(self):
+        state = PilotState()
+        state.apply(TacticalOrder("formation", station="wedge", side="left"))
+        snap = state.snapshot()
+        self.assertEqual(snap["mode"], "formation")
+        self.assertEqual(snap["formation_station"], "wedge")
+        self.assertEqual(snap["formation_side"], "left")
+
+    def test_close_leash_cages_weapons_and_pins_formation(self):
+        state = PilotState(weapons_free=True, mode="engage")
+        state.apply(TacticalOrder("leash", leash="close"))
+        snap = state.snapshot()
+        self.assertEqual(snap["leash"], "close")
+        self.assertFalse(snap["weapons_free"])
+        self.assertEqual(snap["mode"], "formation")
+
+    def test_loose_leash_grants_weapons_free(self):
+        state = PilotState()
+        state.apply(TacticalOrder("leash", leash="loose"))
+        self.assertTrue(state.snapshot()["weapons_free"])
+
+    def test_auto_commit_and_rejoin_cycle(self):
+        state = PilotState(mode="formation", leash="tight")
+        self.assertTrue(state.auto_commit(threat_in_range=True))
+        self.assertEqual(state.snapshot()["mode"], "engage")
+        # bandit still in range: no rejoin
+        self.assertFalse(state.auto_rejoin(threat_gone=False))
+        # bandit gone: return to the prior formation mode
+        self.assertTrue(state.auto_rejoin(threat_gone=True))
+        self.assertEqual(state.snapshot()["mode"], "formation")
+
+    def test_close_leash_blocks_auto_commit(self):
+        state = PilotState(mode="formation", leash="close")
+        self.assertFalse(state.auto_commit(threat_in_range=True))
+        self.assertEqual(state.snapshot()["mode"], "formation")
+
+    def test_lead_commanded_engage_does_not_auto_rejoin(self):
+        state = PilotState(mode="engage")  # lead put it here, not auto-commit
+        self.assertFalse(state.auto_rejoin(threat_gone=True))
+        self.assertEqual(state.snapshot()["mode"], "engage")
 
 
 class _FakeClient:
