@@ -61,6 +61,24 @@ orbit until a lead appears.
 - `Esc → quit` in DCS always returns control instantly; the Lua script also
   releases the controls if the Python agent stops for 1 s.
 
+## 3b. WSO advisory mode (you fly, the AI advises)
+
+To have the AI ride in back as the WSO instead of flying, run with `--wso`:
+
+```
+python -m dcs_bridge.run_pilot --wso --wso-lang ko \
+       --checkpoint checkpoints/ucav_policy.npz
+```
+
+- You fly the jet normally; the AI sends **no** stick/throttle (it's
+  advisory only). You can leave `UCAV.CONTROL_ENABLED = true` — with no
+  commands arriving, the 1 s failsafe simply keeps the controls with you.
+- Advice prints as `[WSO] ...` lines: threat/BRA/weapons/energy calls plus
+  the trained policy's recommended maneuver in plain language.
+- Add `--wso-llm` for a Claude back-seater (needs `ANTHROPIC_API_KEY`);
+  without it, the offline rule-based advisor is used.
+- `--wso-copilot` lets the AI fly *and* advise at the same time.
+
 ## 4. Time acceleration for data collection
 
 The paper accelerated the simulation ~4x while collecting training data.

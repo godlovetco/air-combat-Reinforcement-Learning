@@ -2,7 +2,8 @@
 
 UCAV air-combat maneuver decision by reinforcement learning — now with a
 **DCS World addon** that lets the trained AI pilot fly a real aircraft inside
-Digital Combat Simulator.
+Digital Combat Simulator, team with a crewed lead as a CCA loyal wingman, or
+ride in back as a **WSO** that advises a human pilot as text.
 
 ```
  flight lead voice ──STT──▶ LLM radio wingman (Claude) ──orders──┐
@@ -190,6 +191,44 @@ lead : "push ahead and scout"            → runs 5 km in front to sweep
 lead : "편대 복귀"                        → rejoins formation
 ```
 
+## WSO back-seat advisory (AI advises a human pilot / 텍스트 조언)
+
+`--wso` flips the roles: **you fly, the AI rides in back as the Weapon
+Systems Officer** and calls the fight as text over the intercom. It never
+touches the controls — it only advises.
+
+```
+python -m dcs_bridge.run_pilot --wso --wso-lang ko --checkpoint checkpoints/ucav_policy.npz
+```
+
+What the back-seater calls, prioritized so the urgent stuff never waits:
+
+| Priority | Call | Example |
+|---|---|---|
+| Safety | ground/altitude, hard defensive | "고도! 고도! 기수 당겨!" / "Break now, chaff and flares!" |
+| Threat | spike, bandit nose-on and closing | "스파이크, 4킬로. 브레이크 준비." |
+| Weapons | gun parameters / in-range cue | "건 사정권, 파라미터 안. 사격!" |
+| Energy | corner speed, low-and-slow | "코너 속도 초과, 당겨서 선회율 높여." |
+| Geometry | overshoot / high yo-yo | "오버슈트 주의, 하이 요요로 에너지 살려." |
+| **Maneuver** | **the RL policy's recommended move, in plain words** | "추천: 우로 210, 기수 올려." / "Recommend come right to 210, nose up." |
+| Picture | contact / BRA / no-joy | "브라 045, 8킬로, 고도 6000미터." |
+
+The signature feature is the **maneuver recommendation**: the same trained
+Q-network that can fly the jet instead whispers what *it* would do, so the
+human pilot gets the model's decision as advice rather than as stick input.
+
+| Option | Effect |
+|---|---|
+| `--wso-lang ko` | advisory language (`ko` / `en`) |
+| `--wso-llm` | use a Claude back-seater for free-form advice (default: offline rule-based) |
+| `--wso-period 4` | seconds between LLM back-seater calls |
+| `--wso-copilot` | let the AI fly *and* advise (default: human flies, AI advisory only) |
+
+The rule-based advisor is offline and runs inside the 20 Hz loop, so
+time-critical calls are never late; `--wso-llm` adds a Claude back-seater on
+a background timer for richer, situation-aware phrasing (falls back to the
+rule-based advisor without an `ANTHROPIC_API_KEY`).
+
 ## Training
 
 ```
@@ -232,6 +271,7 @@ dcs_bridge/               Python package (numpy; anthropic for the radio)
   link.py                   UDP protocol to/from the Lua script
   orders.py                 tactical orders + thread-safe pilot state
   wingman.py                LLM radio agent (Claude) + offline brevity parser
+  wso.py                    WSO back-seat text advisor (rule-based + LLM)
   voice.py                  STT/TTS with console fallback
   flight_report.py          post-flight validation stats and plots
   train.py                  python -m dcs_bridge.train

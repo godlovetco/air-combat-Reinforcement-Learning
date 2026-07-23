@@ -18,6 +18,13 @@ DCS by Yoo, Kim & Shim, ICCAS 2021):
 4. run the bank-to-turn autopilot toward the commanded climb angle,
    heading and speed, and send stick/throttle axes back into DCS.
 
+``--wso`` flips the roles: the *human* flies and the AI rides in back as
+the Weapon Systems Officer, calling the fight as text — threat warnings, BRA
+calls, weapons cues, energy/geometry tips, and the trained policy's
+recommended maneuver in plain words ("recommend come right to 210, nose
+up"). In WSO mode the AI never sends stick/throttle; the pilot keeps the
+jet.
+
 ``--radio`` starts the LLM radio wingman: the flight lead speaks (or types)
 commands in Korean or English; a Claude model turns them into tactical
 orders (engage / anchor / vector / break / RTB / weapons state) and answers
@@ -54,6 +61,7 @@ from .link import Contact, DCSLink, Telemetry
 from .orders import PilotState
 from .policy import QNetwork
 from .predictor import TurnRatePredictor
+from .wso import WSOAdvisor, make_wso
 
 GUN_RANGE = 1_200.0   # m, trigger envelope
 GUN_ASPECT = 4.0      # deg
@@ -107,6 +115,53 @@ def altitude_hold_gamma(target_alt: Optional[float], current_alt: float) -> floa
     if target_alt is None:
         return 0.0
     return max(-20.0, min(20.0, 0.02 * (target_alt - current_alt)))
+
+
+def build_wso_situation(telem, own, g_own, feats, gamma_cmd, psi_cmd, mode, snap) -> dict:
+    """Assemble the tactical picture the WSO back-seater reasons over."""
+    bandit = None
+    recommend = None
+    if telem.bandit is not None and feats is not None:
+        bearing = geo.wrap_heading(math.degrees(math.atan2(
+            telem.bandit.pos[0] - own.pos[0],
+            telem.bandit.pos[1] - own.pos[1],
+        )))
+        bandit = {
+            "name": telem.bandit.name,
+            "range_m": feats[2],
+            "own_aspect_deg": feats[0],
+            "bandit_aspect_deg": feats[1],
+            "bearing_deg": bearing,
+            "altitude_m": telem.bandit.pos[2],
+        }
+        if mode == "engage":
+            recommend = {"heading_deg": psi_cmd, "gamma_deg": gamma_cmd}
+
+    lead = None
+    if telem.lead is not None:
+        station_error = 0.0
+        if mode == "formation":
+            station = form.station_position(
+                telem.lead.pos, telem.lead.heading,
+                snap["formation_station"], snap["formation_side"])
+            station_error = form.station_error(own.pos, station)
+        lead = {
+            "name": telem.lead.name,
+            "range_m": math.dist(own.pos, telem.lead.pos),
+            "station_error_m": station_error,
+        }
+
+    return {
+        "t": telem.t,
+        "own": {
+            "altitude_m": own.pos[2], "tas": own.tas, "vv": own.vv,
+            "bank_deg": own.bank, "gamma_deg": g_own, "heading_deg": own.heading,
+        },
+        "bandit": bandit,
+        "lead": lead,
+        "weapons_free": snap["weapons_free"],
+        "recommend": recommend,
+    }
 
 
 def start_radio(args, state: PilotState, get_situation) -> Optional["object"]:
@@ -180,6 +235,32 @@ def main() -> None:
     if args.radio:
         voice = start_radio(args, state, get_situation)
 
+    # WSO back-seat advisory (human flies, AI calls the fight as text).
+    wso = None
+    wso_is_rule = False
+    wso_lock = threading.Lock()
+    latest_wso: dict = {}
+    if args.wso:
+        wso = make_wso(lang=args.wso_lang, model=args.wso_model, use_llm=args.wso_llm)
+        wso_is_rule = isinstance(wso, WSOAdvisor)
+        if not wso_is_rule:
+            def wso_loop() -> None:
+                while True:
+                    time.sleep(max(0.5, args.wso_period))
+                    with wso_lock:
+                        sit = dict(latest_wso)
+                    if not sit:
+                        continue
+                    try:
+                        line = wso.advise(sit)
+                    except Exception as exc:
+                        print(f"WSO: agent error: {exc}")
+                        continue
+                    if line:
+                        print(f"[WSO] {line}")
+            threading.Thread(target=wso_loop, daemon=True, name="wso").start()
+    advisory_only = args.wso and not args.wso_copilot
+
     log_writer = None
     log_file = None
     if args.log_csv:
@@ -203,6 +284,8 @@ def main() -> None:
         f"sending commands to {args.dcs_host}:{args.command_port} "
         f"(weapons {'ENABLED' if args.weapons else 'disabled'}, "
         f"radio {'on' if args.radio else 'off'}, "
+        + (f"WSO advisory [{args.wso_lang}], human flying, "
+           if advisory_only else ("WSO advisory + AI flying, " if args.wso else ""))
         + (f"formation {args.formation} on lead, leash {args.leash})"
            if args.formation else f"free engage, leash {args.leash})")
     )
@@ -364,6 +447,19 @@ def main() -> None:
                         voice.say("2, guns.")
                         called_guns = True
 
+            # ---- WSO back-seat advisory (text) ---------------------------
+            if wso is not None:
+                wso_sit = build_wso_situation(
+                    telem, own, g_own, feats, gamma_cmd, psi_cmd, mode, snap)
+                if wso_is_rule:
+                    line = wso.advise(wso_sit)
+                    if line:
+                        print(f"[WSO] {line}")
+                else:
+                    with wso_lock:
+                        latest_wso.clear()
+                        latest_wso.update(wso_sit)
+
             controls = ap.command(
                 t=telem.t,
                 pitch_deg=own.pitch,
@@ -375,7 +471,8 @@ def main() -> None:
                 v_cmd=speed_cmd,
             )
             controls.trigger = trigger
-            link.send(controls)
+            if not advisory_only:  # in WSO mode the human flies; never command
+                link.send(controls)
 
             if log_writer is not None:
                 b = telem.bandit
@@ -445,6 +542,23 @@ def build_parser() -> argparse.ArgumentParser:
                      help="m; leave formation to engage a bandit inside this range")
     cca.add_argument("--rejoin-range", type=float, default=25_000.0,
                      help="m; rejoin formation when the bandit is beyond this range")
+
+    wsog = p.add_argument_group("WSO back-seat advisory (text)")
+    wsog.add_argument("--wso", action="store_true",
+                      help="AI rides in back as WSO and advises the human pilot "
+                           "as text; by default it does NOT fly the jet")
+    wsog.add_argument("--wso-lang", default="ko", choices=["ko", "en"],
+                      help="advisory language (Korean/English)")
+    wsog.add_argument("--wso-llm", action="store_true",
+                      help="use a Claude back-seater for free-form advice "
+                           "(default: offline rule-based advisor)")
+    wsog.add_argument("--wso-model", default="claude-opus-4-8",
+                      help="Claude model for the LLM back-seater")
+    wsog.add_argument("--wso-period", type=float, default=4.0,
+                      help="seconds between LLM back-seater calls")
+    wsog.add_argument("--wso-copilot", action="store_true",
+                      help="let the AI fly while also advising "
+                           "(default: human flies, AI is advisory only)")
 
     radio = p.add_argument_group("radio wingman (LLM voice commands)")
     radio.add_argument("--radio", action="store_true",
