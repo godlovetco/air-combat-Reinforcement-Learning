@@ -77,7 +77,7 @@ ucav-pilot --radio --license-key UCAV1.xxxx.yyyy
 ```
 
 Optional-dependency extras: `radio` (Claude), `voice` (STT/TTS), `plots`
-(matplotlib), `config` (TOML on Python 3.9/3.10), or `all`.
+(matplotlib), or `all`.
 
 **Config file (no flags to memorize):** copy `ucav_pilot.example.toml`, edit,
 and pass `--config`. Any command-line flag still overrides the file.

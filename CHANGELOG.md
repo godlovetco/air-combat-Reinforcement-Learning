@@ -8,8 +8,8 @@ to follow [Semantic Versioning](https://semver.org/).
 ### Added
 - **Config file**: `--config ucav_pilot.toml` supplies options from a TOML
   file (keys mirror the CLI flags); command-line flags still override it.
-  Ships `ucav_pilot.example.toml`; a `config` extra adds `tomli` for Python
-  3.9/3.10 (3.11+ uses stdlib `tomllib`).
+  Ships `ucav_pilot.example.toml`. Uses stdlib `tomllib` on Python 3.11+ and
+  bundles the `tomli` backport automatically on 3.9/3.10.
 - **Production logging**: lifecycle/error messages go to the console and a
   rotating file at `~/.ucav_pilot/logs/ucav_pilot.log`, controlled by
   `--log-level` and `--log-file`.

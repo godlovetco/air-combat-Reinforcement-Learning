@@ -39,7 +39,7 @@ def _load_toml(path: str) -> Dict[str, Any]:
         except ModuleNotFoundError as exc:
             raise ConfigError(
                 "reading a TOML config needs Python 3.11+ or the 'tomli' "
-                "package (pip install \"ucav-ai-pilot[config]\")"
+                "package (pip install tomli)"
             ) from exc
     try:
         with open(path, "rb") as fh:

@@ -4,6 +4,16 @@ import unittest
 
 from dcs_bridge import config
 
+try:
+    import tomllib as _toml  # noqa: F401
+    _HAVE_TOML = True
+except ModuleNotFoundError:
+    try:
+        import tomli as _toml  # noqa: F401
+        _HAVE_TOML = True
+    except ModuleNotFoundError:
+        _HAVE_TOML = False
+
 
 def _write(text):
     fd, path = tempfile.mkstemp(suffix=".toml")
@@ -12,6 +22,7 @@ def _write(text):
     return path
 
 
+@unittest.skipUnless(_HAVE_TOML, "no TOML parser (needs Python 3.11+ or tomli)")
 class LoadConfigTest(unittest.TestCase):
     def test_flat_keys(self):
         path = _write('radio = true\nleash = "loose"\ntelemetry_port = 7000\n')
@@ -49,6 +60,7 @@ class LoadConfigTest(unittest.TestCase):
             config.load_config(path)
 
 
+@unittest.skipUnless(_HAVE_TOML, "no TOML parser (needs Python 3.11+ or tomli)")
 class ParseArgsWithConfigTest(unittest.TestCase):
     def test_config_supplies_defaults_and_cli_overrides(self):
         from dcs_bridge.run_pilot import parse_args
