@@ -77,7 +77,20 @@ ucav-pilot --radio --license-key UCAV1.xxxx.yyyy
 ```
 
 Optional-dependency extras: `radio` (Claude), `voice` (STT/TTS), `plots`
-(matplotlib), or `all`.
+(matplotlib), `config` (TOML on Python 3.9/3.10), or `all`.
+
+**Config file (no flags to memorize):** copy `ucav_pilot.example.toml`, edit,
+and pass `--config`. Any command-line flag still overrides the file.
+
+```
+ucav-pilot --config ucav_pilot.toml            # options come from the file
+ucav-pilot --config ucav_pilot.toml --weapons  # ...but flags win
+```
+
+**Logging:** lifecycle and error messages are logged to the console and to a
+rotating file at `~/.ucav_pilot/logs/ucav_pilot.log` (attach it when reporting
+an issue). Tune with `--log-level DEBUG|INFO|WARNING|ERROR` and `--log-file`
+(empty string = console only).
 
 <details><summary>Manual install (if you prefer)</summary>
 
@@ -328,12 +341,15 @@ dcs_bridge/               Python package (numpy; anthropic for the radio)
   voice.py                  STT/TTS with console fallback
   licensing.py              Pro license-key verification (gates the LLM tier)
   install.py                one-click DCS addon installer (python -m dcs_bridge.install)
+  config.py                 TOML config file loader (--config)
+  logging_setup.py          console + rotating-file logging
   flight_report.py          post-flight validation stats and plots
   train.py                  python -m dcs_bridge.train
   run_pilot.py              python -m dcs_bridge.run_pilot
 checkpoints/              trained policy weights (.npz)
 tests/                    unit tests (python -m unittest discover -s tests)
 install.bat               Windows one-click installer wrapper
+ucav_pilot.example.toml   sample --config file
 pyproject.toml            packaging: pip install, console scripts, extras
 .github/workflows/        CI (test matrix + build) and tagged-release automation
 LICENSE                   commercial EULA

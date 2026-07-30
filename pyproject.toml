@@ -20,8 +20,13 @@ radio = ["anthropic>=0.40"]
 voice = ["SpeechRecognition>=3.10", "pyttsx3>=2.90"]
 # Post-flight validation plots.
 plots = ["matplotlib>=3.5"]
+# TOML config file support on Python 3.9/3.10 (3.11+ uses stdlib tomllib).
+config = ["tomli>=2.0; python_version < '3.11'"]
 # Everything, for a full local install.
-all = ["anthropic>=0.40", "SpeechRecognition>=3.10", "pyttsx3>=2.90", "matplotlib>=3.5"]
+all = [
+    "anthropic>=0.40", "SpeechRecognition>=3.10", "pyttsx3>=2.90",
+    "matplotlib>=3.5", "tomli>=2.0; python_version < '3.11'",
+]
 
 [project.urls]
 Homepage = "https://github.com/godlovetco/air-combat-Reinforcement-Learning"

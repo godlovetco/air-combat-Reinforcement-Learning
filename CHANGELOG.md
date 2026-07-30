@@ -6,6 +6,13 @@ to follow [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- **Config file**: `--config ucav_pilot.toml` supplies options from a TOML
+  file (keys mirror the CLI flags); command-line flags still override it.
+  Ships `ucav_pilot.example.toml`; a `config` extra adds `tomli` for Python
+  3.9/3.10 (3.11+ uses stdlib `tomllib`).
+- **Production logging**: lifecycle/error messages go to the console and a
+  rotating file at `~/.ucav_pilot/logs/ucav_pilot.log`, controlled by
+  `--log-level` and `--log-file`.
 - **Packaging**: `pyproject.toml` makes the project pip-installable with
   console commands (`ucav-pilot`, `ucav-install`, `ucav-train`,
   `ucav-license`), optional-dependency extras (`radio`, `voice`, `plots`,

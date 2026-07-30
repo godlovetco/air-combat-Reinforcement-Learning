@@ -54,9 +54,11 @@ import threading
 import time
 from typing import Optional, Tuple
 
+from . import config as cfg
 from . import formation as form
 from . import geometry as geo
 from . import licensing
+from .logging_setup import DEFAULT_LOG_FILE, setup_logging
 from .autopilot import Autopilot, AutopilotConfig
 from .link import Contact, DCSLink, Telemetry
 from .orders import PilotState
@@ -197,29 +199,52 @@ def start_radio(args, state: PilotState, get_situation) -> Optional["object"]:
     return voice
 
 
+def parse_args(argv=None):
+    """Parse CLI args, applying a ``--config`` TOML file underneath them.
+
+    A config file supplies defaults; explicit command-line flags still win.
+    """
+    parser = build_parser()
+    pre = argparse.ArgumentParser(add_help=False)
+    pre.add_argument("--config", default=None)
+    known, _ = pre.parse_known_args(argv)
+    if known.config:
+        valid = [a.dest for a in parser._actions if a.dest not in ("help", "version")]
+        try:
+            overrides = cfg.load_config(known.config, valid_keys=valid)
+        except cfg.ConfigError as exc:
+            parser.error(str(exc))
+        parser.set_defaults(**overrides)
+    return parser.parse_args(argv)
+
+
 def main() -> None:
-    args = build_parser().parse_args()
+    args = parse_args()
+    log = setup_logging(args.log_level, args.log_file or None)
+    if getattr(args, "config", None):
+        log.info("loaded config from %s", args.config)
 
     # ---- product license: the LLM tier is a paid feature ---------------
     lic = licensing.load_license(args.license_key)
-    print(f"license: {lic.describe()}")
+    log.info("license: %s", lic.describe())
     if not lic.has(licensing.FEATURE_LLM):
         if args.radio and not args.radio_offline:
-            print("radio: the LLM wingman is a Pro feature; using the offline "
-                  "brevity parser (enter a license key to unlock).")
+            log.warning("radio: the LLM wingman is a Pro feature; using the "
+                        "offline brevity parser (enter a license key to unlock).")
             args.radio_offline = True
         if args.wso and args.wso_llm:
-            print("WSO: the LLM back-seater is a Pro feature; using the "
-                  "rule-based advisor (enter a license key to unlock).")
+            log.warning("WSO: the LLM back-seater is a Pro feature; using the "
+                        "rule-based advisor (enter a license key to unlock).")
             args.wso_llm = False
 
     net: Optional[QNetwork] = None
     if not args.heuristic:
         if os.path.exists(args.checkpoint):
             net = QNetwork.load(args.checkpoint)
-            print(f"policy loaded from {args.checkpoint}")
+            log.info("policy loaded from %s", args.checkpoint)
         else:
-            print(f"checkpoint {args.checkpoint!r} not found -- flying heuristic lead pursuit")
+            log.warning("checkpoint %r not found -- flying heuristic lead pursuit",
+                        args.checkpoint)
 
     link = DCSLink(
         telemetry_port=args.telemetry_port,
@@ -293,22 +318,23 @@ def main() -> None:
     called_guns = False
     in_formation_called = False
 
-    print(
-        f"listening for DCS telemetry on udp/{args.telemetry_port}, "
-        f"sending commands to {args.dcs_host}:{args.command_port} "
-        f"(weapons {'ENABLED' if args.weapons else 'disabled'}, "
-        f"radio {'on' if args.radio else 'off'}, "
-        + (f"WSO advisory [{args.wso_lang}], human flying, "
-           if advisory_only else ("WSO advisory + AI flying, " if args.wso else ""))
-        + (f"formation {args.formation} on lead, leash {args.leash})"
-           if args.formation else f"free engage, leash {args.leash})")
+    log.info(
+        "listening for DCS telemetry on udp/%d, sending commands to %s:%d "
+        "(weapons %s, radio %s, %s%s",
+        args.telemetry_port, args.dcs_host, args.command_port,
+        "ENABLED" if args.weapons else "disabled",
+        "on" if args.radio else "off",
+        (f"WSO advisory [{args.wso_lang}], human flying, "
+         if advisory_only else ("WSO advisory + AI flying, " if args.wso else "")),
+        (f"formation {args.formation} on lead, leash {args.leash})"
+         if args.formation else f"free engage, leash {args.leash})"),
     )
     try:
         while True:
             telem = link.receive()
             if telem is None:
                 if time.time() - last_log > 5.0:
-                    print("waiting for telemetry... (is the mission running?)")
+                    log.warning("waiting for telemetry... (is the mission running?)")
                     last_log = time.time()
                 continue
 
@@ -512,7 +538,7 @@ def main() -> None:
                     + ("  FIRING" if trigger else "")
                 )
     except KeyboardInterrupt:
-        print("\nAI pilot stopped")
+        log.info("AI pilot stopped")
     finally:
         if voice is not None:
             voice.close()
@@ -530,6 +556,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--license-key", default=None,
                    help="Pro license key (else $UCAV_LICENSE_KEY or "
                         "~/.ucav_pilot/license.key; unset = trial)")
+    p.add_argument("--config", default=None, metavar="FILE",
+                   help="load options from a TOML config file (CLI flags override)")
+    p.add_argument("--log-level", default="INFO",
+                   choices=["DEBUG", "INFO", "WARNING", "ERROR"],
+                   help="logging verbosity")
+    p.add_argument("--log-file", default=DEFAULT_LOG_FILE, metavar="FILE",
+                   help="rotating log file (empty string = console only)")
     p.add_argument("--checkpoint", default="checkpoints/ucav_policy.npz")
     p.add_argument("--heuristic", action="store_true",
                    help="ignore the checkpoint and fly lead pursuit")

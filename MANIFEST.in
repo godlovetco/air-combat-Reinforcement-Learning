@@ -3,6 +3,7 @@ include README.md
 include CHANGELOG.md
 include requirements.txt
 include install.bat
+include ucav_pilot.example.toml
 include dcs_bridge/py.typed
 
 # Ship the DCS Lua addon and the trained checkpoint in the source archive so
