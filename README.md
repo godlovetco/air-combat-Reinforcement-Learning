@@ -49,18 +49,56 @@ What this addon reproduces from the paper, and where it differs:
 
 ## Installation (DCS side, Windows)
 
-1. Install Python 3.9+ on the DCS machine and `pip install numpy`.
-2. Clone this repository anywhere, e.g. `C:\ucav-pilot\`.
-3. Copy `dcs-addon\Scripts\UCAVPilot\` into
-   `%USERPROFILE%\Saved Games\DCS\Scripts\` (so the file ends up at
-   `...\Scripts\UCAVPilot\UCAVPilotExport.lua`).
-4. If you have **no** `Saved Games\DCS\Scripts\Export.lua`: copy
-   `dcs-addon\Export.lua` there.
-   If you already have one (Tacview, SRS, DCS-BIOS…): append the loader block
-   from `dcs-addon\Export.lua` to the end of it. The script chains any
-   previously registered export callbacks, so other tools keep working.
-5. Ports: telemetry `udp/7778` out, commands `udp/7779` in, localhost only by
-   default (edit the constants at the top of `UCAVPilotExport.lua` to change).
+**One-click:** install Python 3.9+ (`pip install numpy`), then double-click
+**`install.bat`**. It copies the Lua addon into your DCS `Saved Games\Scripts`
+folder and registers it in `Export.lua` for you — idempotently, chaining any
+exports you already run (Tacview, SRS, DCS-BIOS…), so nothing you had breaks.
+
+```
+install.bat                      # auto-detects DCS / DCS.openbeta and installs
+python -m dcs_bridge.install --dry-run     # preview without changing anything
+python -m dcs_bridge.install --uninstall   # clean removal
+python -m dcs_bridge.install --saved-games "D:\Saved Games\DCS.openbeta"
+```
+
+Ports: telemetry `udp/7778` out, commands `udp/7779` in, localhost only by
+default (edit the constants at the top of `UCAVPilotExport.lua` to change).
+
+<details><summary>Manual install (if you prefer)</summary>
+
+1. Copy `dcs-addon\Scripts\UCAVPilot\` into
+   `%USERPROFILE%\Saved Games\DCS\Scripts\`.
+2. If you have **no** `Saved Games\DCS\Scripts\Export.lua`: copy
+   `dcs-addon\Export.lua` there. If you already have one: append the loader
+   block from `dcs-addon\Export.lua` to the end of it.
+</details>
+
+## Editions & licensing
+
+UCAV AI Pilot is a commercial product (see `LICENSE`). It runs out of the box
+in **Trial**; the **Pro** tier unlocks the Claude-powered features.
+
+| Feature | Trial (no key) | Pro (licensed) |
+|---|:---:|:---:|
+| RL air-combat pilot + autopilot | ✅ | ✅ |
+| CCA loyal-wingman teaming (formation / leash) | ✅ | ✅ |
+| Offline rule-based radio & WSO (KOR/ENG) | ✅ | ✅ |
+| **LLM radio wingman** (Claude, free-form voice) | — | ✅ |
+| **LLM WSO back-seater** (Claude commentary) | — | ✅ |
+
+Without a key the product never refuses to run — it simply falls back to the
+offline rule-based tier, so a trial is always usable. Supply a Pro key with
+`--license-key`, the `UCAV_LICENSE_KEY` environment variable, or a
+`~/.ucav_pilot/license.key` file:
+
+```
+python -m dcs_bridge.run_pilot --radio --license-key UCAV1.xxxx.yyyy
+python -m dcs_bridge.licensing verify UCAV1.xxxx.yyyy      # check a key
+```
+
+Keys are offline-verifiable signed tokens; the vendor mints them with
+`python -m dcs_bridge.licensing issue …` (see `dcs_bridge/licensing.py` for
+the security model and the production hardening path).
 
 ## Flying
 
@@ -273,11 +311,15 @@ dcs_bridge/               Python package (numpy; anthropic for the radio)
   wingman.py                LLM radio agent (Claude) + offline brevity parser
   wso.py                    WSO back-seat text advisor (rule-based + LLM)
   voice.py                  STT/TTS with console fallback
+  licensing.py              Pro license-key verification (gates the LLM tier)
+  install.py                one-click DCS addon installer (python -m dcs_bridge.install)
   flight_report.py          post-flight validation stats and plots
   train.py                  python -m dcs_bridge.train
   run_pilot.py              python -m dcs_bridge.run_pilot
 checkpoints/              trained policy weights (.npz)
 tests/                    unit tests (python -m unittest discover -s tests)
+install.bat               Windows one-click installer wrapper
+LICENSE                   commercial EULA
 main.py, class_env.py     original TF 1.x project (kept as-is)
 ```
 

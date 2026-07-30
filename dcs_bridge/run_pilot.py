@@ -56,6 +56,7 @@ from typing import Optional, Tuple
 
 from . import formation as form
 from . import geometry as geo
+from . import licensing
 from .autopilot import Autopilot, AutopilotConfig
 from .link import Contact, DCSLink, Telemetry
 from .orders import PilotState
@@ -198,6 +199,19 @@ def start_radio(args, state: PilotState, get_situation) -> Optional["object"]:
 
 def main() -> None:
     args = build_parser().parse_args()
+
+    # ---- product license: the LLM tier is a paid feature ---------------
+    lic = licensing.load_license(args.license_key)
+    print(f"license: {lic.describe()}")
+    if not lic.has(licensing.FEATURE_LLM):
+        if args.radio and not args.radio_offline:
+            print("radio: the LLM wingman is a Pro feature; using the offline "
+                  "brevity parser (enter a license key to unlock).")
+            args.radio_offline = True
+        if args.wso and args.wso_llm:
+            print("WSO: the LLM back-seater is a Pro feature; using the "
+                  "rule-based advisor (enter a license key to unlock).")
+            args.wso_llm = False
 
     net: Optional[QNetwork] = None
     if not args.heuristic:
@@ -508,7 +522,14 @@ def main() -> None:
 
 
 def build_parser() -> argparse.ArgumentParser:
+    from . import __version__
+
     p = argparse.ArgumentParser(description=__doc__)
+    p.add_argument("--version", action="version",
+                   version=f"UCAV AI Pilot {__version__}")
+    p.add_argument("--license-key", default=None,
+                   help="Pro license key (else $UCAV_LICENSE_KEY or "
+                        "~/.ucav_pilot/license.key; unset = trial)")
     p.add_argument("--checkpoint", default="checkpoints/ucav_policy.npz")
     p.add_argument("--heuristic", action="store_true",
                    help="ignore the checkpoint and fly lead pursuit")
