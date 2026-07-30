@@ -46,8 +46,22 @@ def managed_block() -> str:
 
 
 def default_addon_src() -> Path:
-    """The repository's ``dcs-addon`` directory (bundled with this package)."""
-    return Path(__file__).resolve().parent.parent / "dcs-addon"
+    """Locate the bundled ``dcs-addon`` directory.
+
+    Works from a release archive / repo checkout (``dcs-addon`` sits beside
+    the ``dcs_bridge`` package) and falls back to the current directory, so
+    ``ucav-install`` finds the Lua files in the common layouts.  Use
+    ``--addon-src`` to point elsewhere.
+    """
+    here = Path(__file__).resolve().parent
+    candidates = [
+        here.parent / "dcs-addon",   # repo / release-zip layout
+        Path.cwd() / "dcs-addon",    # run from an extracted release
+    ]
+    for c in candidates:
+        if (c / "Scripts" / "UCAVPilot" / "UCAVPilotExport.lua").is_file():
+            return c
+    return candidates[0]
 
 
 def default_saved_games_dirs() -> List[Path]:

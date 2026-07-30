@@ -4,3 +4,11 @@ __pycache__/
 checkpoint/
 *.miz
 flight_*.csv
+
+# Python packaging / build artifacts
+build/
+dist/
+*.egg-info/
+*.egg
+.eggs/
+ucav-ai-pilot-*.zip

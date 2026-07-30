@@ -1,5 +1,7 @@
 # air-combat-Reinforcement-Learning
 
+![CI](https://github.com/godlovetco/air-combat-Reinforcement-Learning/actions/workflows/ci.yml/badge.svg)
+
 UCAV air-combat maneuver decision by reinforcement learning — now with a
 **DCS World addon** that lets the trained AI pilot fly a real aircraft inside
 Digital Combat Simulator, team with a crewed lead as a CCA loyal wingman, or
@@ -63,6 +65,19 @@ python -m dcs_bridge.install --saved-games "D:\Saved Games\DCS.openbeta"
 
 Ports: telemetry `udp/7778` out, commands `udp/7779` in, localhost only by
 default (edit the constants at the top of `UCAVPilotExport.lua` to change).
+
+**Python side (console commands):** installing the package gives you the
+`ucav-pilot`, `ucav-install`, `ucav-train`, and `ucav-license` commands:
+
+```
+pip install .                # core (numpy only)
+pip install ".[all]"         # + Pro radio/voice/plots dependencies
+ucav-install                 # same as install.bat
+ucav-pilot --radio --license-key UCAV1.xxxx.yyyy
+```
+
+Optional-dependency extras: `radio` (Claude), `voice` (STT/TTS), `plots`
+(matplotlib), or `all`.
 
 <details><summary>Manual install (if you prefer)</summary>
 
@@ -319,6 +334,8 @@ dcs_bridge/               Python package (numpy; anthropic for the radio)
 checkpoints/              trained policy weights (.npz)
 tests/                    unit tests (python -m unittest discover -s tests)
 install.bat               Windows one-click installer wrapper
+pyproject.toml            packaging: pip install, console scripts, extras
+.github/workflows/        CI (test matrix + build) and tagged-release automation
 LICENSE                   commercial EULA
 main.py, class_env.py     original TF 1.x project (kept as-is)
 ```

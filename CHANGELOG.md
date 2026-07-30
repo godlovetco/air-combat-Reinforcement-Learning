@@ -6,6 +6,14 @@ to follow [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- **Packaging**: `pyproject.toml` makes the project pip-installable with
+  console commands (`ucav-pilot`, `ucav-install`, `ucav-train`,
+  `ucav-license`), optional-dependency extras (`radio`, `voice`, `plots`,
+  `all`), a single-sourced version, and a `py.typed` marker. `MANIFEST.in`
+  bundles the Lua addon and trained checkpoint into the source archive.
+- **CI/CD**: GitHub Actions run the test suite on a Python 3.9–3.12 matrix and
+  build the sdist/wheel on every push and PR; a tagged-release workflow
+  publishes the distributions and an end-user install bundle.
 - **One-click installer** (`install.bat` / `python -m dcs_bridge.install`):
   copies the Lua addon into the DCS `Saved Games\Scripts` folder and registers
   it in `Export.lua` idempotently, chaining any existing exports. Supports
