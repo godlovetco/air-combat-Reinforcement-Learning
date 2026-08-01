@@ -40,7 +40,11 @@ def train(args: argparse.Namespace) -> QNetwork:
         seed=args.seed,
         opponent=args.opponent,
     )
-    net = QNetwork(seed=args.seed)
+    if args.init:
+        net = QNetwork.load(args.init)  # warm-start / fine-tune from a checkpoint
+        print(f"warm-starting from {args.init}")
+    else:
+        net = QNetwork(seed=args.seed)
     target_net = net.clone()
     buffer: Deque[Transition] = collections.deque(maxlen=args.buffer_size)
 
@@ -191,6 +195,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--eval-every", type=int, default=50, metavar="EPISODES",
                    help="periodic greedy eval; the best policy so far is what gets saved")
     p.add_argument("--out", default="checkpoints/ucav_policy.npz")
+    p.add_argument("--init", default=None, metavar="CHECKPOINT",
+                   help="warm-start training from an existing checkpoint "
+                        "(fine-tuning) instead of random weights")
     p.add_argument("--eval-episodes", type=int, default=20,
                    help="greedy evaluation episodes after training (0 = skip)")
     return p
