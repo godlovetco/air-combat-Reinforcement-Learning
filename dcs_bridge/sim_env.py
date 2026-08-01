@@ -13,6 +13,7 @@ altitude advantage -- i.e. converted to the bandit's six o'clock.
 
 from __future__ import annotations
 
+import math
 import random
 from typing import List, Optional, Tuple
 
@@ -26,6 +27,12 @@ ARENA_Z = 11_000.0    # m
 WIN_RANGE = 2_500.0   # m
 WIN_ASPECT = 30.0     # deg
 
+# Reactive-bandit limits (per decision step), matched to the agent's own
+# 10 deg/step maneuver granularity so fights stay balanced and stable.
+BANDIT_TURN = 10.0    # deg/step max heading change
+BANDIT_GAMMA = 5.0    # deg/step max climb-angle change
+OPPONENTS = ("straight", "pursuit", "evasive", "mixed")
+
 
 class UCAVSimEnv:
     """Gym-style 1v1 environment (observation = legacy 72-dim input)."""
@@ -37,11 +44,15 @@ class UCAVSimEnv:
         randomize: bool = True,
         shaping: float = 0.05,
         seed: Optional[int] = None,
+        opponent: str = "straight",
     ):
+        if opponent not in OPPONENTS:
+            raise ValueError(f"unknown opponent {opponent!r}, expected {OPPONENTS}")
         self.max_steps = max_steps
         self.dt = dt
         self.randomize = randomize
         self.shaping = shaping
+        self.opponent = opponent
         self.rng = random.Random(seed)
         self.reset()
 
@@ -61,9 +72,59 @@ class UCAVSimEnv:
             self.act_b[2] = geo.wrap_heading(180.0 + r.uniform(-30.0, 30.0))
             self.act_r[2] = geo.wrap_heading(r.uniform(-20.0, 20.0))
 
+        # Resolve "mixed" to a concrete behavior for this episode.
+        self._episode_opponent = (
+            self.rng.choice(("straight", "pursuit", "evasive"))
+            if self.opponent == "mixed" else self.opponent
+        )
+
         self.steps = 0
         self.done = False
         return self._obs()
+
+    # ------------------------------------------------------------------ #
+    def _update_bandit(self) -> None:
+        """Reactive bandit: steer ``act_b`` toward its behavior's intent.
+
+        ``straight`` leaves the bandit on its fixed profile (legacy default).
+        ``pursuit`` turns to point at the agent; ``evasive`` breaks toward the
+        beam when the agent is threatening from behind, else flies straight.
+        """
+        behavior = getattr(self, "_episode_opponent", "straight")
+        if behavior == "straight":
+            return
+
+        dx = self.pos_r[0] - self.pos_b[0]
+        dy = self.pos_r[1] - self.pos_b[1]
+        dz = self.pos_r[2] - self.pos_b[2]
+        horiz = math.hypot(dx, dy)
+        d = math.hypot(horiz, dz)
+        bearing = geo.wrap_heading(math.degrees(math.atan2(dx, dy)))
+        v_b, gamma_b, psi_b = self.act_b
+
+        if behavior == "pursuit":
+            desired_psi = bearing
+            desired_gamma = max(-20.0, min(20.0, math.degrees(math.atan2(dz, max(horiz, 1.0)))))
+        else:  # evasive
+            # Bandit aspect: angle between its velocity and the line of sight
+            # back to the agent; large => the agent is in its rear hemisphere.
+            feats = geo.situation(self.pos_b, self.act_b, self.pos_r, self.act_r)
+            threatened = d < 8_000.0 and feats[0] > 90.0
+            if threatened:
+                # Break toward the beam (whichever 90 deg side is the nearer turn).
+                left = geo.wrap_heading(bearing - 90.0)
+                right = geo.wrap_heading(bearing + 90.0)
+                desired_psi = (left if abs(geo.heading_error(left, psi_b))
+                               <= abs(geo.heading_error(right, psi_b)) else right)
+                desired_gamma = -5.0  # unload slightly to keep speed
+            else:
+                desired_psi, desired_gamma = psi_b, gamma_b
+
+        turn = max(-BANDIT_TURN, min(BANDIT_TURN, geo.heading_error(desired_psi, psi_b)))
+        psi_b = geo.wrap_heading(psi_b + turn)
+        gamma_b = gamma_b + max(-BANDIT_GAMMA, min(BANDIT_GAMMA, desired_gamma - gamma_b))
+        gamma_b = max(-geo.GAMMA_LIMIT_DEG, min(geo.GAMMA_LIMIT_DEG, gamma_b))
+        self.act_b = [v_b, gamma_b, psi_b]
 
     def _obs(self) -> np.ndarray:
         return geo.build_network_input(
@@ -77,6 +138,7 @@ class UCAVSimEnv:
 
         cands = geo.candidate_actions(*self.act_r)
         self.act_r = cands[action_idx]
+        self._update_bandit()  # reactive opponents adjust heading/climb here
         self.pos_r = geo.step_point_mass(self.pos_r, self.act_r, self.dt)
         self.pos_b = geo.step_point_mass(self.pos_b, self.act_b, self.dt)
         self.steps += 1

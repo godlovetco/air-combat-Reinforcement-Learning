@@ -303,13 +303,24 @@ python -m dcs_bridge.train --episodes 1000 --out checkpoints/ucav_policy.npz
 python -m unittest discover -s tests     # test suite
 ```
 
-Training runs the original point-mass 1v1 engagement (head-on merge at
-10 km, 250 m/s, win = inside 2,500 m with <30° own aspect, >30° bandit
-aspect and an altitude advantage) with the legacy bugs fixed: proper
-degree→radian conversion in the bandit aspect angle, no re-initialization of
-the network between updates, plus experience replay, a target network, an
-ε-greedy schedule and best-checkpoint selection (periodic greedy evaluation
-decides which weights are kept).
+Training runs the point-mass 1v1 engagement (head-on merge at 10 km,
+250 m/s, win = inside 2,500 m with <30° own aspect, >30° bandit aspect and
+an altitude advantage) with the legacy bugs fixed: proper degree→radian
+conversion in the bandit aspect angle, no re-initialization of the network
+between updates, plus experience replay, a target network, an ε-greedy
+schedule and best-checkpoint selection (periodic greedy evaluation decides
+which weights are kept).
+
+**Reactive opponents** (`--opponent`): the bandit is no longer only
+straight-flying. `pursuit` turns to point at the agent (a turning fight),
+`evasive` breaks toward the beam when threatened from behind, and `mixed`
+randomizes the behavior per episode so the policy learns to generalize
+instead of overfitting one target profile. `--eval-opponent` picks the
+behavior the periodic/final greedy evaluation scores against.
+
+```
+python -m dcs_bridge.train --episodes 2500 --opponent mixed --out checkpoints/ucav_policy.npz
+```
 
 A trained checkpoint is committed at `checkpoints/ucav_policy.npz` so the
 DCS addon works out of the box. Its greedy evaluation over 50 randomized

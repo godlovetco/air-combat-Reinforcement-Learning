@@ -6,6 +6,12 @@ to follow [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- **Reactive training opponents**: the training bandit can now `pursuit`
+  (turn to point at the agent), go `evasive` (break toward the beam when
+  threatened), or `mixed` (randomized per episode), via `--opponent` /
+  `--eval-opponent`. The default stays straight-flying, so existing behavior
+  is unchanged. This lets the policy learn to fight a maneuvering target
+  instead of overfitting a straight one.
 - **Config file**: `--config ucav_pilot.toml` supplies options from a TOML
   file (keys mirror the CLI flags); command-line flags still override it.
   Ships `ucav_pilot.example.toml`. Uses stdlib `tomllib` on Python 3.11+ and

@@ -38,6 +38,7 @@ def train(args: argparse.Namespace) -> QNetwork:
         randomize=not args.fixed_start,
         shaping=args.shaping,
         seed=args.seed,
+        opponent=args.opponent,
     )
     net = QNetwork(seed=args.seed)
     target_net = net.clone()
@@ -104,7 +105,8 @@ def train(args: argparse.Namespace) -> QNetwork:
 
         # DQN training oscillates; keep the best policy seen, not the last.
         if episode % args.eval_every == 0 and episode >= args.epsilon_decay_episodes // 2:
-            win, conv = evaluate(net, episodes=12, seed=args.seed + episode)
+            win, conv = evaluate(net, episodes=12, seed=args.seed + episode,
+                                 opponent=args.eval_opponent or args.opponent)
             score = win + 0.5 * conv
             if score > best_score:
                 best_score = score
@@ -130,7 +132,8 @@ def train(args: argparse.Namespace) -> QNetwork:
     return net
 
 
-def evaluate(net: QNetwork, episodes: int = 20, seed: int = 1234):
+def evaluate(net: QNetwork, episodes: int = 20, seed: int = 1234,
+             opponent: str = "straight"):
     """Greedy evaluation.
 
     Returns ``(win_rate, conversion_rate)``.  A "conversion" ends the episode
@@ -142,7 +145,7 @@ def evaluate(net: QNetwork, episodes: int = 20, seed: int = 1234):
     """
     from .geometry import situation
 
-    env = UCAVSimEnv(randomize=True, shaping=0.0, seed=seed)
+    env = UCAVSimEnv(randomize=True, shaping=0.0, seed=seed, opponent=opponent)
     wins = 0
     conversions = 0
     for _ in range(episodes):
@@ -175,6 +178,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--target-sync", type=int, default=10, metavar="EPISODES")
     p.add_argument("--shaping", type=float, default=0.05,
                    help="weight of the dense angular-advantage reward (0 = off)")
+    p.add_argument("--opponent", default="straight",
+                   choices=["straight", "pursuit", "evasive", "mixed"],
+                   help="bandit behavior during training (mixed = randomized per episode)")
+    p.add_argument("--eval-opponent", default=None,
+                   choices=["straight", "pursuit", "evasive", "mixed"],
+                   help="bandit behavior for periodic/final eval (default: same as --opponent)")
     p.add_argument("--fixed-start", action="store_true",
                    help="use the exact legacy head-on start instead of randomized geometry")
     p.add_argument("--seed", type=int, default=7)
@@ -192,9 +201,10 @@ def main() -> None:
     train(args)
     if args.eval_episodes:
         net = QNetwork.load(args.out)  # the best policy is what was saved
-        win_rate, conversion_rate = evaluate(net, args.eval_episodes)
+        opp = args.eval_opponent or args.opponent
+        win_rate, conversion_rate = evaluate(net, args.eval_episodes, opponent=opp)
         print(
-            f"greedy evaluation over {args.eval_episodes} episodes: "
+            f"greedy evaluation over {args.eval_episodes} episodes vs {opp}: "
             f"win rate {win_rate:.2f}, conversion rate {conversion_rate:.2f}"
         )
 
