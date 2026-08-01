@@ -323,14 +323,26 @@ python -m dcs_bridge.train --episodes 2500 --opponent mixed --out checkpoints/uc
 ```
 
 A trained checkpoint is committed at `checkpoints/ucav_policy.npz` so the
-DCS addon works out of the box. Its greedy evaluation over 50 randomized
-engagements (head-on merge ±30° heading, ±800 m altitude offset, equal
-250 m/s speeds, straight-flying bandit):
+DCS addon works out of the box. It is fine-tuned against **reactive
+opponents** (`--init` from a base policy, then `--opponent mixed`), which
+both lifts performance on the classic straight-flying target and removes
+the old blind spot against a bandit that turns to fight. Greedy evaluation
+over 240 randomized engagements (3 seeds × 80; head-on merge ±30° heading,
+±800 m altitude offset, equal 250 m/s speeds):
 
-| Metric | Result |
-|---|---|
-| Win rate (gun envelope: <2,500 m, own aspect <30°, bandit aspect >30°, altitude advantage) | **0.72** |
-| Conversion rate (established in bandit's rear hemisphere: own aspect <30°, bandit aspect >150°) | **0.92** |
+| Bandit behavior | Win rate | Conversion rate |
+|---|---|---|
+| straight (classic profile) | **0.96** | **1.00** |
+| evasive (breaks when threatened) | **1.00** | **1.00** |
+| mixed (randomized per episode) | **0.72** | **0.75** |
+| pursuit (turns to fight) | 0.14 | 0.14 |
+
+Win = gun envelope (<2,500 m, own aspect <30°, bandit aspect >30°, altitude
+advantage); conversion = established in the bandit's rear hemisphere (own
+aspect <30°, bandit aspect >150°). Against a pure-pursuit bandit at equal
+speed a gun-envelope *win* is inherently hard (a sustained two-circle
+stalemate), but the fine-tuned policy is no longer helpless there — up from
+**0.00** for the straight-only-trained baseline.
 
 ## Repository layout
 

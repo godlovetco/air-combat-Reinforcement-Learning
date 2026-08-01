@@ -12,6 +12,16 @@ to follow [Semantic Versioning](https://semver.org/).
   `--eval-opponent`. The default stays straight-flying, so existing behavior
   is unchanged. This lets the policy learn to fight a maneuvering target
   instead of overfitting a straight one.
+- **`--init` warm-start**: fine-tune training from an existing checkpoint
+  instead of random weights (resume, or adapt a policy to new opponents).
+
+### Changed
+- **Upgraded the shipped policy** (`checkpoints/ucav_policy.npz`): fine-tuned
+  against `mixed` reactive opponents. Greedy eval over 240 randomized
+  engagements now scores win/conversion **0.96 / 1.00** vs a straight bandit
+  (up from 0.72 / 0.92), **1.00 / 1.00** vs evasive, **0.72 / 0.75** vs
+  mixed, and **0.14** vs a pure-pursuit bandit — up from 0.00, closing the
+  previous total blind spot against a target that turns to fight.
 - **Config file**: `--config ucav_pilot.toml` supplies options from a TOML
   file (keys mirror the CLI flags); command-line flags still override it.
   Ships `ucav_pilot.example.toml`. Uses stdlib `tomllib` on Python 3.11+ and
