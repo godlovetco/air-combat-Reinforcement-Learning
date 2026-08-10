@@ -29,6 +29,20 @@ from .sim_env import UCAVSimEnv
 Transition = Tuple[np.ndarray, int, float, np.ndarray, bool]
 
 
+def parse_mixed_weights(spec):
+    """'pursuit=3,straight=1,evasive=1' -> {'pursuit': 3.0, ...} (None passes)."""
+    if not spec:
+        return None
+    weights = {}
+    for part in spec.split(","):
+        name, _, value = part.partition("=")
+        name = name.strip()
+        if not name or not value:
+            raise ValueError(f"bad --mixed-weights entry {part!r}, expected name=weight")
+        weights[name] = float(value)
+    return weights
+
+
 def train(args: argparse.Namespace) -> QNetwork:
     random.seed(args.seed)
     np.random.seed(args.seed)
@@ -39,6 +53,7 @@ def train(args: argparse.Namespace) -> QNetwork:
         shaping=args.shaping,
         seed=args.seed,
         opponent=args.opponent,
+        mixed_weights=parse_mixed_weights(getattr(args, "mixed_weights", None)),
     )
     if args.init:
         net = QNetwork.load(args.init)  # warm-start / fine-tune from a checkpoint
@@ -188,6 +203,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--eval-opponent", default=None,
                    choices=["straight", "pursuit", "evasive", "mixed"],
                    help="bandit behavior for periodic/final eval (default: same as --opponent)")
+    p.add_argument("--mixed-weights", default=None, metavar="SPEC",
+                   help="per-episode behavior weights for --opponent mixed, e.g. "
+                        "'pursuit=3,straight=1,evasive=1' (rehearsal curriculum); "
+                        "default = uniform")
     p.add_argument("--fixed-start", action="store_true",
                    help="use the exact legacy head-on start instead of randomized geometry")
     p.add_argument("--seed", type=int, default=7)

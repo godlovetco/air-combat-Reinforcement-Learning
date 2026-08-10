@@ -45,14 +45,26 @@ class UCAVSimEnv:
         shaping: float = 0.05,
         seed: Optional[int] = None,
         opponent: str = "straight",
+        mixed_weights: Optional[dict] = None,
     ):
         if opponent not in OPPONENTS:
             raise ValueError(f"unknown opponent {opponent!r}, expected {OPPONENTS}")
+        if mixed_weights is not None:
+            bad = set(mixed_weights) - {"straight", "pursuit", "evasive"}
+            if bad:
+                raise ValueError(f"unknown mixed_weights behaviors: {sorted(bad)}")
+            if not any(w > 0 for w in mixed_weights.values()):
+                raise ValueError("mixed_weights must contain a positive weight")
         self.max_steps = max_steps
         self.dt = dt
         self.randomize = randomize
         self.shaping = shaping
         self.opponent = opponent
+        # Per-episode behavior weights for "mixed" (rehearsal curriculum);
+        # None = uniform. E.g. {"pursuit": 3, "straight": 1, "evasive": 1}
+        # trains mostly the turning fight while rehearsing the others so
+        # fine-tuning does not forget them.
+        self.mixed_weights = mixed_weights
         self.rng = random.Random(seed)
         self.reset()
 
@@ -73,10 +85,15 @@ class UCAVSimEnv:
             self.act_r[2] = geo.wrap_heading(r.uniform(-20.0, 20.0))
 
         # Resolve "mixed" to a concrete behavior for this episode.
-        self._episode_opponent = (
-            self.rng.choice(("straight", "pursuit", "evasive"))
-            if self.opponent == "mixed" else self.opponent
-        )
+        if self.opponent == "mixed":
+            behaviors = ("straight", "pursuit", "evasive")
+            if self.mixed_weights:
+                weights = [self.mixed_weights.get(b, 0.0) for b in behaviors]
+                self._episode_opponent = self.rng.choices(behaviors, weights=weights)[0]
+            else:
+                self._episode_opponent = self.rng.choice(behaviors)
+        else:
+            self._episode_opponent = self.opponent
 
         self.steps = 0
         self.done = False

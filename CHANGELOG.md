@@ -14,6 +14,10 @@ to follow [Semantic Versioning](https://semver.org/).
   instead of overfitting a straight one.
 - **`--init` warm-start**: fine-tune training from an existing checkpoint
   instead of random weights (resume, or adapt a policy to new opponents).
+- **`--mixed-weights` rehearsal curriculum**: bias the per-episode behavior
+  draw of `--opponent mixed` (e.g. `pursuit=3,straight=1,evasive=1`) to train
+  one behavior hard while rehearsing the others, preventing catastrophic
+  forgetting during fine-tuning.
 
 ### Changed
 - **Upgraded the shipped policy** (`checkpoints/ucav_policy.npz`): fine-tuned

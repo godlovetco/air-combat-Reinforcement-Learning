@@ -316,7 +316,10 @@ straight-flying. `pursuit` turns to point at the agent (a turning fight),
 `evasive` breaks toward the beam when threatened from behind, and `mixed`
 randomizes the behavior per episode so the policy learns to generalize
 instead of overfitting one target profile. `--eval-opponent` picks the
-behavior the periodic/final greedy evaluation scores against.
+behavior the periodic/final greedy evaluation scores against, and
+`--mixed-weights "pursuit=3,straight=1,evasive=1"` biases the per-episode
+draw — a rehearsal curriculum that trains one behavior hard while
+rehearsing the others, so `--init` fine-tuning doesn't forget them.
 
 ```
 python -m dcs_bridge.train --episodes 2500 --opponent mixed --out checkpoints/ucav_policy.npz

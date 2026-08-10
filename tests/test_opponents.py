@@ -63,6 +63,34 @@ class OpponentTest(unittest.TestCase):
         self.assertTrue(seen <= {"straight", "pursuit", "evasive"})
         self.assertGreater(len(seen), 1)  # actually varies
 
+    def test_mixed_weights_bias_the_draw(self):
+        env = UCAVSimEnv(randomize=True, shaping=0.0, seed=9, opponent="mixed",
+                         mixed_weights={"pursuit": 10, "straight": 1, "evasive": 1})
+        draws = []
+        for _ in range(120):
+            env.reset()
+            draws.append(env._episode_opponent)
+        frac_pursuit = draws.count("pursuit") / len(draws)
+        self.assertGreater(frac_pursuit, 0.6)   # 10/12 expected ~0.83
+        self.assertLess(frac_pursuit, 1.0)      # rehearsal episodes still occur
+
+    def test_mixed_weights_validation(self):
+        with self.assertRaises(ValueError):
+            UCAVSimEnv(opponent="mixed", mixed_weights={"kamikaze": 1})
+        with self.assertRaises(ValueError):
+            UCAVSimEnv(opponent="mixed", mixed_weights={"pursuit": 0.0})
+
+    def test_parse_mixed_weights_spec(self):
+        from dcs_bridge.train import parse_mixed_weights
+        self.assertIsNone(parse_mixed_weights(None))
+        self.assertIsNone(parse_mixed_weights(""))
+        self.assertEqual(
+            parse_mixed_weights("pursuit=3,straight=1,evasive=1"),
+            {"pursuit": 3.0, "straight": 1.0, "evasive": 1.0},
+        )
+        with self.assertRaises(ValueError):
+            parse_mixed_weights("pursuit")
+
     def test_reactive_episode_runs_to_completion(self):
         env = UCAVSimEnv(randomize=True, shaping=0.05, seed=6, opponent="mixed")
         obs = env.reset()
