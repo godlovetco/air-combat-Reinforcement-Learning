@@ -20,12 +20,15 @@ to follow [Semantic Versioning](https://semver.org/).
   forgetting during fine-tuning.
 
 ### Changed
-- **Upgraded the shipped policy** (`checkpoints/ucav_policy.npz`): fine-tuned
-  against `mixed` reactive opponents. Greedy eval over 240 randomized
-  engagements now scores win/conversion **0.96 / 1.00** vs a straight bandit
-  (up from 0.72 / 0.92), **1.00 / 1.00** vs evasive, **0.72 / 0.75** vs
-  mixed, and **0.14** vs a pure-pursuit bandit — up from 0.00, closing the
-  previous total blind spot against a target that turns to fight.
+- **Upgraded the shipped policy** (`checkpoints/ucav_policy.npz`), twice:
+  first fine-tuned against `mixed` reactive opponents (straight 0.72→0.96
+  win, pursuit 0.00→0.14), then through a pursuit-heavy rehearsal
+  curriculum (`--mixed-weights "pursuit=3,straight=1,evasive=1"`). Final
+  greedy eval over 240 randomized engagements per behavior: **0.96 / 0.97**
+  win/conversion vs a straight bandit, **0.99 / 0.99** vs evasive,
+  **0.81 / 0.81** vs mixed, and **0.35 / 0.36** vs pure pursuit — the
+  hardest case, up from 0.00 for the original straight-only-trained policy,
+  with the other profiles held.
 - **Config file**: `--config ucav_pilot.toml` supplies options from a TOML
   file (keys mirror the CLI flags); command-line flags still override it.
   Ships `ucav_pilot.example.toml`. Uses stdlib `tomllib` on Python 3.11+ and
