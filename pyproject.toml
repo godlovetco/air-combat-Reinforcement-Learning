@@ -34,6 +34,7 @@ ucav-pilot = "dcs_bridge.run_pilot:main"
 ucav-install = "dcs_bridge.install:main"
 ucav-train = "dcs_bridge.train:main"
 ucav-license = "dcs_bridge.licensing:_main"
+ucav-support = "dcs_bridge.support:main"
 
 [tool.setuptools]
 packages = ["dcs_bridge"]

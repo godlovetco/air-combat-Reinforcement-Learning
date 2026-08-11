@@ -92,6 +92,13 @@ rotating file at `~/.ucav_pilot/logs/ucav_pilot.log` (attach it when reporting
 an issue). Tune with `--log-level DEBUG|INFO|WARNING|ERROR` and `--log-file`
 (empty string = console only).
 
+**Reporting a problem:** run `ucav-support` to collect a diagnostics bundle
+(version, OS/Python, license *status*, DCS addon install state, checkpoint
+fingerprint, log tail) into a zip you can attach to a support request. It
+contains **no license key and no API key** — only whether they are set — and
+everything in it is plain text, so you can inspect the bundle before sending
+it. `ucav-support --print` shows the same data without writing a file.
+
 <details><summary>Manual install (if you prefer)</summary>
 
 1. Copy `dcs-addon\Scripts\UCAVPilot\` into
@@ -371,6 +378,7 @@ dcs_bridge/               Python package (numpy; anthropic for the radio)
   install.py                one-click DCS addon installer (python -m dcs_bridge.install)
   config.py                 TOML config file loader (--config)
   logging_setup.py          console + rotating-file logging
+  support.py                diagnostics bundle for support (ucav-support)
   flight_report.py          post-flight validation stats and plots
   train.py                  python -m dcs_bridge.train
   run_pilot.py              python -m dcs_bridge.run_pilot

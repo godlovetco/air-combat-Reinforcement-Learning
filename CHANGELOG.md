@@ -14,6 +14,12 @@ to follow [Semantic Versioning](https://semver.org/).
   instead of overfitting a straight one.
 - **`--init` warm-start**: fine-tune training from an existing checkpoint
   instead of random weights (resume, or adapt a policy to new opponents).
+- **Support diagnostics bundle** (`ucav-support`): collects version,
+  OS/Python, license *status*, DCS addon install state, checkpoint
+  fingerprint and the log tail into a zip for support requests. Secrets are
+  never collected — the license key and API keys are reported as
+  present/absent booleans only, and the bundle is plain text so users can
+  inspect it before sending.
 - **`--mixed-weights` rehearsal curriculum**: bias the per-episode behavior
   draw of `--opponent mixed` (e.g. `pursuit=3,straight=1,evasive=1`) to train
   one behavior hard while rehearsing the others, preventing catastrophic
