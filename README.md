@@ -334,27 +334,32 @@ python -m dcs_bridge.train --episodes 2500 --opponent mixed --out checkpoints/uc
 
 A trained checkpoint is committed at `checkpoints/ucav_policy.npz` so the
 DCS addon works out of the box. It is fine-tuned against **reactive
-opponents** in two stages: `--opponent mixed` from a base policy, then a
-pursuit-heavy **rehearsal curriculum**
-(`--mixed-weights "pursuit=3,straight=1,evasive=1"`) that strengthens the
-turning fight while rehearsing the other behaviors so nothing is forgotten.
-Greedy evaluation over 240 randomized engagements per behavior (3 seeds ×
-80; head-on merge ±30° heading, ±800 m altitude offset, equal 250 m/s
-speeds):
+opponents** through a **rehearsal curriculum** — `--init` from the previous
+policy with `--opponent mixed --mixed-weights "pursuit=5,straight=1,evasive=1"`,
+which drills the turning fight while rehearsing the other behaviors so
+nothing is forgotten. Greedy evaluation over 400 randomized engagements per
+behavior on **held-out seeds** never used for model selection (head-on merge
+±30° heading, ±800 m altitude offset, equal 250 m/s speeds):
 
 | Bandit behavior | Win rate | Conversion rate |
 |---|---|---|
-| straight (classic profile) | **0.96** | **0.97** |
-| evasive (breaks when threatened) | **0.99** | **0.99** |
-| mixed (randomized per episode) | **0.81** | **0.81** |
-| pursuit (turns to fight) | 0.35 | 0.36 |
+| straight (classic profile) | **0.99** | **1.00** |
+| pursuit (turns to fight) | **0.95** | **0.96** |
+| evasive (breaks when threatened) | **0.99** | **1.00** |
+| mixed (randomized per episode) | **0.98** | **0.99** |
 
 Win = gun envelope (<2,500 m, own aspect <30°, bandit aspect >30°, altitude
 advantage); conversion = established in the bandit's rear hemisphere (own
-aspect <30°, bandit aspect >150°). The pure-pursuit turning fight at equal
-speed is the hardest case — the straight-only-trained baseline scored
-**0.00** there, and each curriculum stage has raised it (0.00 → 0.14 →
-0.35) without giving up the other profiles.
+aspect <30°, bandit aspect >150°).
+
+The pursuit result is the notable one. The original straight-only-trained
+policy scored **0.00** against a bandit that turns to fight, and the
+curriculum lifted it 0.00 → 0.14 → 0.35 → **0.95**. Earlier revisions of
+this README described the equal-speed pure-pursuit fight as inherently
+near-unwinnable (a two-circle stalemate); that was wrong — it was a
+training gap, not a limit of the geometry. Given enough exposure to a
+turning opponent the policy learns to beat it while holding every other
+profile.
 
 ## Repository layout
 

@@ -26,15 +26,16 @@ to follow [Semantic Versioning](https://semver.org/).
   forgetting during fine-tuning.
 
 ### Changed
-- **Upgraded the shipped policy** (`checkpoints/ucav_policy.npz`), twice:
-  first fine-tuned against `mixed` reactive opponents (straight 0.72→0.96
-  win, pursuit 0.00→0.14), then through a pursuit-heavy rehearsal
-  curriculum (`--mixed-weights "pursuit=3,straight=1,evasive=1"`). Final
-  greedy eval over 240 randomized engagements per behavior: **0.96 / 0.97**
-  win/conversion vs a straight bandit, **0.99 / 0.99** vs evasive,
-  **0.81 / 0.81** vs mixed, and **0.35 / 0.36** vs pure pursuit — the
-  hardest case, up from 0.00 for the original straight-only-trained policy,
-  with the other profiles held.
+- **Upgraded the shipped policy** (`checkpoints/ucav_policy.npz`) through
+  successive rehearsal-curriculum stages. Final greedy eval over 400
+  randomized engagements per behavior on held-out seeds: **0.99 / 1.00**
+  win/conversion vs a straight bandit, **0.95 / 0.96** vs pure pursuit,
+  **0.99 / 1.00** vs evasive, **0.98 / 0.99** vs mixed. The pursuit axis —
+  a bandit that turns to fight — went 0.00 → 0.14 → 0.35 → **0.95** across
+  the curriculum stages while every other profile held or improved. This
+  also corrects an earlier claim in this project's docs that the
+  equal-speed pure-pursuit fight was inherently near-unwinnable: it was a
+  training gap, not a geometric limit.
 - **Config file**: `--config ucav_pilot.toml` supplies options from a TOML
   file (keys mirror the CLI flags); command-line flags still override it.
   Ships `ucav_pilot.example.toml`. Uses stdlib `tomllib` on Python 3.11+ and
