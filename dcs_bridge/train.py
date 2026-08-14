@@ -198,10 +198,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--shaping", type=float, default=0.05,
                    help="weight of the dense angular-advantage reward (0 = off)")
     p.add_argument("--opponent", default="straight",
-                   choices=["straight", "pursuit", "evasive", "mixed"],
+                   choices=["straight", "pursuit", "evasive", "ace", "mixed"],
                    help="bandit behavior during training (mixed = randomized per episode)")
     p.add_argument("--eval-opponent", default=None,
-                   choices=["straight", "pursuit", "evasive", "mixed"],
+                   choices=["straight", "pursuit", "evasive", "ace", "mixed"],
                    help="bandit behavior for periodic/final eval (default: same as --opponent)")
     p.add_argument("--mixed-weights", default=None, metavar="SPEC",
                    help="per-episode behavior weights for --opponent mixed, e.g. "

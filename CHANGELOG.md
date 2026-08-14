@@ -6,6 +6,13 @@ to follow [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- **`ace` adaptive opponent**: a bandit that presses the attack while it
+  holds the angular advantage and breaks away when it loses it. Added as an
+  attempt at a harder benchmark; measured at **0.99 / 1.00** against the
+  shipped policy, which had never trained on it, so it is *not* harder than
+  the pure turning fight (0.95) — recorded here because the negative result
+  is the useful part. `mixed` now includes `ace` in its draw, so `mixed`
+  scores are not comparable across that change.
 - **Reactive training opponents**: the training bandit can now `pursuit`
   (turn to point at the agent), go `evasive` (break toward the beam when
   threatened), or `mixed` (randomized per episode), via `--opponent` /

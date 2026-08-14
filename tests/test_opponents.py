@@ -60,8 +60,41 @@ class OpponentTest(unittest.TestCase):
         for _ in range(30):
             env.reset()
             seen.add(env._episode_opponent)
-        self.assertTrue(seen <= {"straight", "pursuit", "evasive"})
+        self.assertTrue(seen <= {"straight", "pursuit", "evasive", "ace"})
         self.assertGreater(len(seen), 1)  # actually varies
+
+    def test_ace_presses_when_it_holds_the_advantage(self):
+        # Bandit on the agent's tail: it is pointing at us, we are not at it.
+        env = UCAVSimEnv(randomize=False, shaping=0.0, seed=11, opponent="ace")
+        env.pos_r = [100_000.0, 100_000.0, 3_000.0]
+        env.act_r = [250.0, 0.0, 0.0]                # agent heading north
+        env.pos_b = [100_000.0, 98_000.0, 3_000.0]   # bandit 2 km astern
+        env.act_b = [250.0, 0.0, 0.0]                # also north -> pointing at us
+        want = _bearing(env.pos_b, env.pos_r)        # straight ahead (000)
+        before = abs(geo.heading_error(want, env.act_b[2]))
+        env.step(4)
+        after = abs(geo.heading_error(want, env.act_b[2]))
+        self.assertLessEqual(after, before)           # pressed the attack
+
+    def test_ace_breaks_when_it_is_losing(self):
+        # Agent on the bandit's tail: we point at it, it does not point at us.
+        env = UCAVSimEnv(randomize=False, shaping=0.0, seed=12, opponent="ace")
+        env.pos_b = [100_000.0, 100_000.0, 3_000.0]
+        env.act_b = [250.0, 0.0, 0.0]                # bandit heading north
+        env.pos_r = [100_000.0, 98_000.0, 3_000.0]   # agent 2 km astern
+        env.act_r = [250.0, 0.0, 0.0]                # pursuing north
+        env.step(4)
+        # Losing -> breaks off its original heading rather than pressing.
+        self.assertGreater(abs(geo.heading_error(env.act_b[2], 0.0)), 0.0)
+
+    def test_ace_is_a_valid_opponent_and_mixed_member(self):
+        from dcs_bridge.sim_env import MIXED_BEHAVIORS, OPPONENTS
+        self.assertIn("ace", OPPONENTS)
+        self.assertIn("ace", MIXED_BEHAVIORS)
+        env = UCAVSimEnv(randomize=True, shaping=0.0, seed=13, opponent="mixed",
+                         mixed_weights={"ace": 1})
+        env.reset()
+        self.assertEqual(env._episode_opponent, "ace")
 
     def test_mixed_weights_bias_the_draw(self):
         env = UCAVSimEnv(randomize=True, shaping=0.0, seed=9, opponent="mixed",

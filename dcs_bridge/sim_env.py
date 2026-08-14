@@ -31,7 +31,9 @@ WIN_ASPECT = 30.0     # deg
 # 10 deg/step maneuver granularity so fights stay balanced and stable.
 BANDIT_TURN = 10.0    # deg/step max heading change
 BANDIT_GAMMA = 5.0    # deg/step max climb-angle change
-OPPONENTS = ("straight", "pursuit", "evasive", "mixed")
+OPPONENTS = ("straight", "pursuit", "evasive", "ace", "mixed")
+# Behaviors a "mixed" episode may draw (everything except "mixed" itself).
+MIXED_BEHAVIORS = ("straight", "pursuit", "evasive", "ace")
 
 
 class UCAVSimEnv:
@@ -50,7 +52,7 @@ class UCAVSimEnv:
         if opponent not in OPPONENTS:
             raise ValueError(f"unknown opponent {opponent!r}, expected {OPPONENTS}")
         if mixed_weights is not None:
-            bad = set(mixed_weights) - {"straight", "pursuit", "evasive"}
+            bad = set(mixed_weights) - set(MIXED_BEHAVIORS)
             if bad:
                 raise ValueError(f"unknown mixed_weights behaviors: {sorted(bad)}")
             if not any(w > 0 for w in mixed_weights.values()):
@@ -86,7 +88,7 @@ class UCAVSimEnv:
 
         # Resolve "mixed" to a concrete behavior for this episode.
         if self.opponent == "mixed":
-            behaviors = ("straight", "pursuit", "evasive")
+            behaviors = MIXED_BEHAVIORS
             if self.mixed_weights:
                 weights = [self.mixed_weights.get(b, 0.0) for b in behaviors]
                 self._episode_opponent = self.rng.choices(behaviors, weights=weights)[0]
@@ -106,6 +108,9 @@ class UCAVSimEnv:
         ``straight`` leaves the bandit on its fixed profile (legacy default).
         ``pursuit`` turns to point at the agent; ``evasive`` breaks toward the
         beam when the agent is threatening from behind, else flies straight.
+        ``ace`` switches between the two by who currently holds the angular
+        advantage -- it presses the attack when it is winning and breaks away
+        when it is losing, which is a far harder fight than either alone.
         """
         behavior = getattr(self, "_episode_opponent", "straight")
         if behavior == "straight":
@@ -118,6 +123,16 @@ class UCAVSimEnv:
         d = math.hypot(horiz, dz)
         bearing = geo.wrap_heading(math.degrees(math.atan2(dx, dy)))
         v_b, gamma_b, psi_b = self.act_b
+
+        if behavior == "ace":
+            # Own aspect (how well the bandit points at us) vs the agent's
+            # aspect (how well the agent points at the bandit). Press when we
+            # are pointing better than the agent is, otherwise break away.
+            b_feats = geo.situation(self.pos_b, self.act_b, self.pos_r, self.act_r)
+            r_feats = geo.situation(self.pos_r, self.act_r, self.pos_b, self.act_b)
+            bandit_aspect, agent_aspect = b_feats[0], r_feats[0]
+            losing = d < 8_000.0 and agent_aspect < bandit_aspect
+            behavior = "evasive" if losing else "pursuit"
 
         if behavior == "pursuit":
             desired_psi = bearing

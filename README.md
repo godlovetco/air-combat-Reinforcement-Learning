@@ -320,13 +320,21 @@ which weights are kept).
 
 **Reactive opponents** (`--opponent`): the bandit is no longer only
 straight-flying. `pursuit` turns to point at the agent (a turning fight),
-`evasive` breaks toward the beam when threatened from behind, and `mixed`
-randomizes the behavior per episode so the policy learns to generalize
-instead of overfitting one target profile. `--eval-opponent` picks the
-behavior the periodic/final greedy evaluation scores against, and
-`--mixed-weights "pursuit=3,straight=1,evasive=1"` biases the per-episode
+`evasive` breaks toward the beam when threatened from behind, `ace`
+switches between the two by who currently holds the angular advantage, and
+`mixed` randomizes the behavior per episode so the policy learns to
+generalize instead of overfitting one target profile. `--eval-opponent`
+picks the behavior the periodic/final greedy evaluation scores against, and
+`--mixed-weights "pursuit=5,straight=1,evasive=1"` biases the per-episode
 draw — a rehearsal curriculum that trains one behavior hard while
 rehearsing the others, so `--init` fine-tuning doesn't forget them.
+
+Note on the numbers below: `ace` was added *after* the shipped policy was
+trained, as an attempt at a harder benchmark. It did not turn out to be
+harder — the policy handles it at 0.99 without ever having trained on it —
+so the hardest case remains the pure turning fight. `mixed` now draws
+`ace` too, so its score is not directly comparable to figures from before
+that change.
 
 ```
 python -m dcs_bridge.train --episodes 2500 --opponent mixed --out checkpoints/ucav_policy.npz
@@ -346,7 +354,8 @@ behavior on **held-out seeds** never used for model selection (head-on merge
 | straight (classic profile) | **0.99** | **1.00** |
 | pursuit (turns to fight) | **0.95** | **0.96** |
 | evasive (breaks when threatened) | **0.99** | **1.00** |
-| mixed (randomized per episode) | **0.98** | **0.99** |
+| ace (presses when winning, breaks when losing) | **0.99** | **1.00** |
+| mixed (randomized per episode) | **0.97** | **0.98** |
 
 Win = gun envelope (<2,500 m, own aspect <30°, bandit aspect >30°, altitude
 advantage); conversion = established in the bandit's rear hemisphere (own
