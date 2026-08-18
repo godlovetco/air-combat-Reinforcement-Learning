@@ -60,6 +60,20 @@ def parse_hidden(spec):
 def build_network(args: argparse.Namespace) -> QNetwork:
     """Warm-start from ``--init`` or build a fresh net for ``--action-set``."""
     num_actions, input_dim = geo.action_set_dims(args.action_set)
+    if getattr(args, "transfer_init", None):
+        if args.init:
+            raise ValueError("use either --init or --transfer-init, not both")
+        if args.action_set != "energy":
+            raise ValueError("--transfer-init lifts a legacy policy into the "
+                             "energy action set; pass --action-set energy")
+        legacy = QNetwork.load(args.transfer_init)
+        if legacy.action_set != "legacy":
+            raise ValueError(
+                f"--transfer-init expects a legacy checkpoint, got "
+                f"{legacy.action_set!r} ({legacy.num_actions} actions)"
+            )
+        print(f"transferring {args.transfer_init} into the energy action set")
+        return legacy.to_energy()
     if args.init:
         net = QNetwork.load(args.init)
         if net.num_actions != num_actions:
@@ -292,6 +306,10 @@ def build_parser() -> argparse.ArgumentParser:
                         "'energy' = those 9 crossed with burner/hold/idle (27), "
                         "with speed coupled to climb angle and turn rate. "
                         "Checkpoints are not interchangeable between the two")
+    p.add_argument("--transfer-init", default=None, metavar="CHECKPOINT",
+                   help="warm-start an --action-set energy run from a legacy "
+                        "72->9 checkpoint, lifting its maneuver preferences into "
+                        "the 216->27 network so only the throttle axis is new")
     p.add_argument("--hidden", default=None, metavar="A,B",
                    help="hidden layer sizes for a fresh network (default 100,30; "
                         "the energy action set wants something like 160,60)")

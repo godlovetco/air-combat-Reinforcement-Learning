@@ -173,6 +173,52 @@ class QNetwork:
         other.params = {k: v.copy() for k, v in self.params.items()}
         return other
 
+    def to_energy(self) -> "QNetwork":
+        """Lift a legacy 72->9 network into the 216->27 energy family.
+
+        Energy candidate ``3i+k`` is legacy candidate ``i`` flown at
+        burner/hold/idle, so its 8 features occupy the slot legacy candidate
+        ``i`` used to.  Copying each input row into all three slots (scaled by
+        1/3, since three rows now sum where one did) and replicating each
+        output column three times yields a network whose *maneuver* preferences
+        are the legacy policy's and whose *throttle* axis starts indifferent --
+        so fine-tuning only has to learn the axis that is actually new.
+
+        The transfer is approximate, not exact: the three throttle variants of
+        a maneuver differ slightly in speed, and the energy action set scales
+        ``delta_v2`` differently.  It is a warm start, not a substitute for
+        training.
+        """
+        if self.action_set != "legacy":
+            raise ValueError("to_energy() expects a legacy 72->9 network")
+        from .geometry import STATE_DIM, THROTTLE_DELTAS, action_set_dims
+
+        k = len(THROTTLE_DELTAS)
+        num_actions, input_dim = action_set_dims("energy")
+        out = QNetwork(seed=0, input_dim=input_dim, num_actions=num_actions,
+                       hidden=self.hidden)
+        w0, w2 = self.params["W0"], self.params["W2"]
+        new_w0 = np.empty((input_dim, w0.shape[1]))
+        new_w2 = np.empty((w2.shape[0], num_actions))
+        new_b2 = np.empty(num_actions)
+        for i in range(self.num_actions):
+            block = w0[i * STATE_DIM:(i + 1) * STATE_DIM] / float(k)
+            for j in range(k):
+                row = (i * k + j) * STATE_DIM
+                new_w0[row:row + STATE_DIM] = block
+                new_w2[:, i * k + j] = w2[:, i]
+                new_b2[i * k + j] = self.params["b2"][i]
+        # Break the exact three-way tie toward "hold", the throttle setting
+        # closest to the constant-speed policy this came from.
+        new_b2[1::k] += 1e-9
+        out.params["W0"] = new_w0
+        out.params["b0"] = self.params["b0"].copy()
+        out.params["W1"] = self.params["W1"].copy()
+        out.params["b1"] = self.params["b1"].copy()
+        out.params["W2"] = new_w2
+        out.params["b2"] = new_b2
+        return out
+
     @property
     def action_set(self) -> str:
         """Name of the geometry action set this network was built for."""

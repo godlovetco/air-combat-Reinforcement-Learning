@@ -212,10 +212,26 @@ def situation(
 # Legacy normalization constants (kept identical so behavior is comparable).
 _NORM = np.array([200.0, 200.0, 20000.0, 200.0, 10000.0, 1.0, 40000.0, 10000.0])
 
+# The legacy scale of 1.0 on ``delta_v2`` was harmless only because the legacy
+# action set pins both aircraft at their starting speed, making that feature
+# identically zero in every situation it ever saw.  With a throttle axis it
+# ranges over +/-145,000 while every other normalized feature is order 1, which
+# would swamp the first layer.  The energy set therefore scales it like ``v2``.
+_NORM_ENERGY = np.array(
+    [200.0, 200.0, 20000.0, 200.0, 10000.0, 40000.0, 40000.0, 10000.0]
+)
+_NORMS = {"legacy": _NORM, "energy": _NORM_ENERGY}
 
-def normalize(features: Sequence[float]) -> np.ndarray:
-    """Scale an 8-feature situation vector, same constants as class_env."""
-    return np.asarray(features, dtype=np.float64) / _NORM
+
+def normalize(
+    features: Sequence[float], action_set: str = DEFAULT_ACTION_SET
+) -> np.ndarray:
+    """Scale an 8-feature situation vector for the given action set."""
+    if action_set not in _NORMS:
+        raise ValueError(
+            f"unknown action set {action_set!r}, expected {tuple(_NORMS)}"
+        )
+    return np.asarray(features, dtype=np.float64) / _NORMS[action_set]
 
 
 def build_network_input(
@@ -243,5 +259,5 @@ def build_network_input(
     rows = []
     for cand in cands:
         next_r = step_point_mass(pos_r, cand, dt)
-        rows.append(normalize(situation(next_r, cand, next_b, act_b)))
+        rows.append(normalize(situation(next_r, cand, next_b, act_b), action_set))
     return np.concatenate(rows)

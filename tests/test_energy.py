@@ -203,3 +203,96 @@ class TrainWiringTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class NormalizationTest(unittest.TestCase):
+    def test_legacy_normalization_is_untouched(self):
+        feats = [30.0, 150.0, 5000.0, 90.0, 200.0, 0.0, 62500.0, 3000.0]
+        self.assertTrue(np.array_equal(
+            geo.normalize(feats), np.asarray(feats) / geo._NORM))
+
+    def test_energy_scales_delta_v2_like_v2(self):
+        # The legacy scale of 1.0 leaves delta_v2 at O(10^5) once speeds vary,
+        # which would swamp every other feature in the first layer.
+        feats = geo.situation([0.0, 0.0, 3000.0], [geo.V_MAX, 0.0, 0.0],
+                              [0.0, 5000.0, 3000.0], [geo.V_MIN, 0.0, 180.0])
+        legacy = geo.normalize(feats)
+        energy = geo.normalize(feats, "energy")
+        self.assertGreater(abs(legacy[5]), 1000.0)
+        self.assertLess(abs(energy[5]), 10.0)
+        # Only the delta_v2 column differs between the two scalings.
+        for i in range(len(feats)):
+            if i != 5:
+                self.assertAlmostEqual(legacy[i], energy[i], places=12)
+
+    def test_unknown_action_set_rejected(self):
+        with self.assertRaises(ValueError):
+            geo.normalize([0.0] * 8, "afterburner-only")
+
+
+class TransferTest(unittest.TestCase):
+    def test_lift_preserves_shape_and_family(self):
+        legacy = QNetwork.load("checkpoints/ucav_policy.npz")
+        energy = legacy.to_energy()
+        self.assertEqual((energy.input_dim, energy.num_actions), (216, 27))
+        self.assertEqual(energy.hidden, legacy.hidden)
+        self.assertEqual(energy.action_set, "energy")
+
+    def test_lift_mostly_reproduces_the_legacy_maneuver_choice(self):
+        """The lift is a warm start, not an identity: it agrees ~97%, not 100%.
+
+        The three throttle variants of a maneuver differ slightly in speed and
+        the energy action set rescales ``delta_v2``, so the inputs are close but
+        not equal.  Asserting exact agreement would be asserting something
+        untrue -- what matters is that the prior transferred.
+        """
+        legacy = QNetwork.load("checkpoints/ucav_policy.npz")
+        energy = legacy.to_energy()
+        rng = np.random.default_rng(0)
+        agree = 0
+        trials = 200
+        for _ in range(trials):
+            pos_r = [130_000.0, 100_000.0, 3_000.0]
+            pos_b = [130_000.0 + rng.uniform(-6_000, 6_000),
+                     100_000.0 + rng.uniform(2_000, 12_000),
+                     3_000.0 + rng.uniform(-800, 800)]
+            act_r = [250.0, 0.0, float(rng.uniform(0, 360))]
+            act_b = [250.0, 0.0, float(rng.uniform(0, 360))]
+            x_l = geo.build_network_input(pos_r, act_r, pos_b, act_b)
+            x_e = geo.build_network_input(pos_r, act_r, pos_b, act_b,
+                                          action_set="energy")
+            agree += int(legacy.act(x_l) == energy.act(x_e) // 3)
+        self.assertGreater(agree / trials, 0.9)
+
+    def test_lift_ranks_the_nine_maneuvers_the_same_way(self):
+        legacy = QNetwork.load("checkpoints/ucav_policy.npz")
+        energy = legacy.to_energy()
+        pos_r, act_r = [130_000.0, 100_000.0, 3_000.0], [250.0, 0.0, 0.0]
+        pos_b, act_b = [130_000.0, 110_000.0, 3_000.0], [250.0, 0.0, 180.0]
+        q_l = legacy.forward(geo.build_network_input(pos_r, act_r, pos_b, act_b))
+        q_e = energy.forward(
+            geo.build_network_input(pos_r, act_r, pos_b, act_b, action_set="energy"))
+        # Collapse the throttle axis: each maneuver's three columns are equal up
+        # to the tie-break epsilon, so take the "hold" one.
+        self.assertEqual(list(np.argsort(q_l)), list(np.argsort(q_e[1::3])))
+
+    def test_lift_rejects_a_non_legacy_source(self):
+        energy = QNetwork(seed=1, input_dim=216, num_actions=27, hidden=(16, 8))
+        with self.assertRaises(ValueError):
+            energy.to_energy()
+
+    def test_transfer_init_wiring(self):
+        from dcs_bridge.train import build_network, build_parser
+        parse = build_parser().parse_args
+        net = build_network(parse(["--action-set", "energy", "--transfer-init",
+                                   "checkpoints/ucav_policy.npz"]))
+        self.assertEqual((net.input_dim, net.num_actions), (216, 27))
+
+        # Wrong action set, both flags at once, and a non-legacy source.
+        for argv in (
+            ["--transfer-init", "checkpoints/ucav_policy.npz"],
+            ["--action-set", "energy", "--transfer-init", "checkpoints/ucav_policy.npz",
+             "--init", "checkpoints/ucav_policy.npz"],
+        ):
+            with self.assertRaises(ValueError):
+                build_network(parse(argv))

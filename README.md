@@ -366,6 +366,23 @@ the fight stays fair, while `straight` keeps constant speed because constant
 everything *is* the classic profile. Energy-mode scores are therefore not
 comparable to legacy-mode scores.
 
+Two things had to be fixed for the energy set to be trainable at all, both
+worth knowing if you extend the feature vector:
+
+* **`delta_v2` was effectively unnormalized.** The legacy scaling divides the
+  situation vector by `[200, 200, 20000, 200, 10000, 1, 40000, 10000]` — note
+  the `1` on `v_r² − v_b²`. That was harmless only because the legacy action
+  set pins both aircraft at 250 m/s, so the feature is *identically zero* in
+  every situation it ever sees. Let speed vary and it reaches 145,000 while
+  every other normalized feature is order 1, swamping the first layer. The
+  energy set scales it like `v2`; the legacy constants are untouched.
+* **From scratch, 216→27 is a much harder problem.** `--transfer-init` lifts a
+  trained legacy policy into the energy family: energy candidate `3i+k` is
+  legacy candidate `i` at burner/hold/idle, so each input block is copied into
+  all three slots (scaled 1/3) and each output column replicated three times.
+  The result agrees with the legacy policy's maneuver choice ~97% of the time
+  and starts the fine-tune with only the throttle axis to learn.
+
 Note on the numbers below: `ace` was added as an attempt at a harder
 benchmark and did not turn out to be harder — the policy handled it at 0.99
 without ever having trained on it. Self-play is the benchmark that finally

@@ -17,6 +17,12 @@ to follow [Semantic Versioning](https://semver.org/).
   mismatched checkpoint and `run_pilot` detects the action set from the file and
   drives the throttle loop from the policy's choice. `legacy` stays the default
   and is unchanged.
+- **`--transfer-init`**: lift a trained legacy 72→9 policy into the 216→27
+  energy network (each input block copied into the maneuver's three throttle
+  slots at 1/3 weight, each output column replicated three times), so an energy
+  run starts from the legacy policy's maneuver preferences with only the
+  throttle axis left to learn. Agrees with the source policy's maneuver choice
+  ~97% of the time.
 - **Self-play opponent** (`--opponent selfplay`): the bandit is flown by a
   *frozen* policy checkpoint instead of a scripted intent, so the opponent is
   exactly as capable as the agent. `--selfplay-init` picks the checkpoint
@@ -54,6 +60,15 @@ to follow [Semantic Versioning](https://semver.org/).
   draw of `--opponent mixed` (e.g. `pursuit=3,straight=1,evasive=1`) to train
   one behavior hard while rehearsing the others, preventing catastrophic
   forgetting during fine-tuning.
+
+### Fixed
+- **`delta_v2` was effectively unnormalized** — the legacy scaling divides it by
+  1.0 while every other feature gets a real scale. Harmless in the legacy action
+  set, where both aircraft are pinned at their start speed and the feature is
+  identically zero, but with a throttle axis it reaches 145,000 against
+  order-1 neighbors and swamps the first layer. The `energy` action set scales
+  it like `v2`; the legacy constants are deliberately left untouched so old
+  checkpoints stay valid.
 
 ### Changed
 - **Upgraded the shipped policy** (`checkpoints/ucav_policy.npz`) again, and
