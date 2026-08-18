@@ -23,7 +23,8 @@ from typing import Deque, Tuple
 
 import numpy as np
 
-from .policy import QNetwork
+from . import geometry as geo
+from .policy import HIDDEN_SIZES, QNetwork
 from .sim_env import UCAVSimEnv
 
 Transition = Tuple[np.ndarray, int, float, np.ndarray, bool]
@@ -41,6 +42,36 @@ def parse_mixed_weights(spec):
             raise ValueError(f"bad --mixed-weights entry {part!r}, expected name=weight")
         weights[name] = float(value)
     return weights
+
+
+def parse_hidden(spec):
+    """'160,60' -> (160, 60); None/'' -> the default hidden sizes."""
+    if not spec:
+        return HIDDEN_SIZES
+    try:
+        sizes = tuple(int(part) for part in spec.split(","))
+    except ValueError:
+        raise ValueError(f"bad --hidden {spec!r}, expected comma-separated ints")
+    if len(sizes) != 2 or any(size < 1 for size in sizes):
+        raise ValueError(f"bad --hidden {spec!r}, expected two positive ints")
+    return sizes
+
+
+def build_network(args: argparse.Namespace) -> QNetwork:
+    """Warm-start from ``--init`` or build a fresh net for ``--action-set``."""
+    num_actions, input_dim = geo.action_set_dims(args.action_set)
+    if args.init:
+        net = QNetwork.load(args.init)
+        if net.num_actions != num_actions:
+            raise ValueError(
+                f"--init checkpoint {args.init!r} has {net.num_actions} actions "
+                f"({net.action_set!r} action set) but --action-set is "
+                f"{args.action_set!r} ({num_actions} actions)"
+            )
+        print(f"warm-starting from {args.init}")
+        return net
+    return QNetwork(seed=args.seed, input_dim=input_dim,
+                    num_actions=num_actions, hidden=parse_hidden(args.hidden))
 
 
 def selfplay_policy(args: argparse.Namespace, net: QNetwork, mixed_weights):
@@ -67,11 +98,7 @@ def train(args: argparse.Namespace) -> QNetwork:
     random.seed(args.seed)
     np.random.seed(args.seed)
 
-    if args.init:
-        net = QNetwork.load(args.init)  # warm-start / fine-tune from a checkpoint
-        print(f"warm-starting from {args.init}")
-    else:
-        net = QNetwork(seed=args.seed)
+    net = build_network(args)
 
     mixed_weights = parse_mixed_weights(getattr(args, "mixed_weights", None))
     bandit_policy = selfplay_policy(args, net, mixed_weights)
@@ -83,6 +110,7 @@ def train(args: argparse.Namespace) -> QNetwork:
         opponent=args.opponent,
         mixed_weights=mixed_weights,
         bandit_policy=bandit_policy,
+        action_set=args.action_set,
     )
     target_net = net.clone()
     buffer: Deque[Transition] = collections.deque(maxlen=args.buffer_size)
@@ -160,7 +188,8 @@ def train(args: argparse.Namespace) -> QNetwork:
                                  seed=args.seed + episode,
                                  opponent=args.eval_opponent or args.opponent,
                                  bandit_policy=env.bandit_policy,
-                                 mixed_weights=mixed_weights)
+                                 mixed_weights=mixed_weights,
+                                 action_set=args.action_set)
             score = win + 0.5 * conv
             if score > best_score:
                 best_score = score
@@ -188,7 +217,7 @@ def train(args: argparse.Namespace) -> QNetwork:
 
 def evaluate(net: QNetwork, episodes: int = 20, seed: int = 1234,
              opponent: str = "straight", bandit_policy=None,
-             mixed_weights=None):
+             mixed_weights=None, action_set: str = geo.DEFAULT_ACTION_SET):
     """Greedy evaluation.
 
     Returns ``(win_rate, conversion_rate)``.  A "conversion" ends the episode
@@ -206,7 +235,8 @@ def evaluate(net: QNetwork, episodes: int = 20, seed: int = 1234,
     if needs_policy and bandit_policy is None:
         bandit_policy = net.clone()  # mirror match against a frozen copy of itself
     env = UCAVSimEnv(randomize=True, shaping=0.0, seed=seed, opponent=opponent,
-                     mixed_weights=mixed_weights, bandit_policy=bandit_policy)
+                     mixed_weights=mixed_weights, bandit_policy=bandit_policy,
+                     action_set=action_set)
     wins = 0
     conversions = 0
     for _ in range(episodes):
@@ -256,6 +286,15 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--selfplay-refresh", type=int, default=0, metavar="EPISODES",
                    help="promote the learner to be its own frozen opponent every N "
                         "episodes (0 = keep the original self-play opponent)")
+    p.add_argument("--action-set", default=geo.DEFAULT_ACTION_SET,
+                   choices=sorted(geo.ACTION_SETS),
+                   help="'legacy' = the original 9 constant-speed maneuvers; "
+                        "'energy' = those 9 crossed with burner/hold/idle (27), "
+                        "with speed coupled to climb angle and turn rate. "
+                        "Checkpoints are not interchangeable between the two")
+    p.add_argument("--hidden", default=None, metavar="A,B",
+                   help="hidden layer sizes for a fresh network (default 100,30; "
+                        "the energy action set wants something like 160,60)")
     p.add_argument("--fixed-start", action="store_true",
                    help="use the exact legacy head-on start instead of randomized geometry")
     p.add_argument("--seed", type=int, default=7)
@@ -284,7 +323,8 @@ def main() -> None:
         bandit = QNetwork.load(args.selfplay_init) if args.selfplay_init else None
         win_rate, conversion_rate = evaluate(
             net, args.eval_episodes, opponent=opp, bandit_policy=bandit,
-            mixed_weights=parse_mixed_weights(args.mixed_weights))
+            mixed_weights=parse_mixed_weights(args.mixed_weights),
+            action_set=args.action_set)
         print(
             f"greedy evaluation over {args.eval_episodes} episodes vs {opp}: "
             f"win rate {win_rate:.2f}, conversion rate {conversion_rate:.2f}"

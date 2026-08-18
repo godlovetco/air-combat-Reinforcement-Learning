@@ -6,6 +6,17 @@ to follow [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- **Energy action set** (`--action-set energy`): the 9 legacy maneuvers crossed
+  with a throttle axis (burner / hold / idle) for 27 actions, with speed coupled
+  to the flight path — `dv/dt = throttle*4.0 - g*sin(gamma) - 3.0*(turn/10 deg)`,
+  clamped to 120–400 m/s. The legacy set holds speed fixed, so every turn is
+  free and a fight between equals cannot resolve; this is the trade that makes
+  an energy fight an energy fight. `QNetwork` is now shaped by its constructor
+  and `load` reads the layer sizes back out of the checkpoint, so `energy`
+  networks (216→27) and `legacy` networks (72→9) coexist; `--init` refuses a
+  mismatched checkpoint and `run_pilot` detects the action set from the file and
+  drives the throttle loop from the policy's choice. `legacy` stays the default
+  and is unchanged.
 - **Self-play opponent** (`--opponent selfplay`): the bandit is flown by a
   *frozen* policy checkpoint instead of a scripted intent, so the opponent is
   exactly as capable as the agent. `--selfplay-init` picks the checkpoint

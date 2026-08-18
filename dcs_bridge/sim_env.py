@@ -52,7 +52,12 @@ class UCAVSimEnv:
         opponent: str = "straight",
         mixed_weights: Optional[dict] = None,
         bandit_policy=None,
+        action_set: str = geo.DEFAULT_ACTION_SET,
     ):
+        if action_set not in geo.ACTION_SETS:
+            raise ValueError(
+                f"unknown action set {action_set!r}, expected {tuple(geo.ACTION_SETS)}"
+            )
         if opponent not in OPPONENTS:
             raise ValueError(f"unknown opponent {opponent!r}, expected {OPPONENTS}")
         if mixed_weights is not None:
@@ -71,6 +76,7 @@ class UCAVSimEnv:
         self.randomize = randomize
         self.shaping = shaping
         self.opponent = opponent
+        self.action_set = action_set
         # Per-episode behavior weights for "mixed" (rehearsal curriculum);
         # None = uniform. E.g. {"pursuit": 3, "straight": 1, "evasive": 1}
         # trains mostly the turning fight while rehearsing the others so
@@ -176,15 +182,23 @@ class UCAVSimEnv:
         psi_b = geo.wrap_heading(psi_b + turn)
         gamma_b = gamma_b + max(-BANDIT_GAMMA, min(BANDIT_GAMMA, desired_gamma - gamma_b))
         gamma_b = max(-geo.GAMMA_LIMIT_DEG, min(geo.GAMMA_LIMIT_DEG, gamma_b))
+        if self.action_set != "legacy":
+            # A reactive bandit runs full throttle and pays the same gravity and
+            # induced-drag bill the agent does, so the energy fight is fair.
+            # ``straight`` is exempt: constant everything *is* the classic profile.
+            v_b = geo.energy_step(v_b, gamma_b, turn, 1.0, self.dt)
         self.act_b = [v_b, gamma_b, psi_b]
 
     def _update_bandit_selfplay(self) -> None:
         """Fly the bandit with the frozen policy, from the bandit's own seat."""
         obs = geo.build_network_input(
-            self.pos_b, self.act_b, self.pos_r, self.act_r, self.dt
+            self.pos_b, self.act_b, self.pos_r, self.act_r, self.dt,
+            action_set=self.action_set,
         )
         action = self.bandit_policy.act(obs)
-        self.act_b = geo.candidate_actions(*self.act_b)[action]
+        self.act_b = geo.candidate_actions(
+            *self.act_b, action_set=self.action_set, dt=self.dt
+        )[action]
 
     def set_bandit_policy(self, net) -> None:
         """Swap the frozen self-play opponent (e.g. a newer learner snapshot)."""
@@ -192,7 +206,8 @@ class UCAVSimEnv:
 
     def _obs(self) -> np.ndarray:
         return geo.build_network_input(
-            self.pos_r, self.act_r, self.pos_b, self.act_b, self.dt
+            self.pos_r, self.act_r, self.pos_b, self.act_b, self.dt,
+            action_set=self.action_set,
         )
 
     # ------------------------------------------------------------------ #
@@ -200,7 +215,9 @@ class UCAVSimEnv:
         if self.done:
             raise RuntimeError("step() called on a finished episode; call reset()")
 
-        cands = geo.candidate_actions(*self.act_r)
+        cands = geo.candidate_actions(
+            *self.act_r, action_set=self.action_set, dt=self.dt
+        )
         self.act_r = cands[action_idx]
         self._update_bandit()  # reactive opponents adjust heading/climb here
         self.pos_r = geo.step_point_mass(self.pos_r, self.act_r, self.dt)

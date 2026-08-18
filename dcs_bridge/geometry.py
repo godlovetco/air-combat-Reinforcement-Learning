@@ -58,6 +58,48 @@ NUM_ACTIONS = len(ACTION_DELTAS)
 STATE_DIM = 8
 INPUT_DIM = NUM_ACTIONS * STATE_DIM  # 72, as in the legacy network
 
+# --------------------------------------------------------------------- #
+# Energy action set (opt-in)
+# --------------------------------------------------------------------- #
+# The legacy action set holds speed fixed, so there is no energy game: every
+# turn is free and a fight between equals decays into a pure angles problem.
+# The energy set adds a throttle axis (burner / hold / idle) to each of the 9
+# maneuvers, and couples speed to the flight path the way a real jet is
+# coupled -- gravity along the climb angle, induced drag in the turn.
+THROTTLE_DELTAS: Tuple[float, ...] = (+1.0, 0.0, -1.0)  # burner, hold, idle
+ACTION_DELTAS_ENERGY: Tuple[Tuple[float, float, float], ...] = tuple(
+    (d_gamma, d_psi, d_thr)
+    for d_gamma, d_psi in ACTION_DELTAS
+    for d_thr in THROTTLE_DELTAS
+)
+
+ACTION_SETS = {"legacy": ACTION_DELTAS, "energy": ACTION_DELTAS_ENERGY}
+DEFAULT_ACTION_SET = "legacy"
+
+V_MIN = 120.0           # m/s, below this the jet is out of usable energy
+V_MAX = 400.0           # m/s
+THROTTLE_ACCEL = 4.0    # m/s^2 commanded by full burner / idle
+G_ACCEL = 9.81          # m/s^2
+TURN_BLEED = 3.0        # m/s^2 of induced drag at the full 10 deg/step turn
+
+
+def action_set_dims(action_set: str = DEFAULT_ACTION_SET) -> Tuple[int, int]:
+    """``(num_actions, input_dim)`` for a named action set."""
+    if action_set not in ACTION_SETS:
+        raise ValueError(
+            f"unknown action set {action_set!r}, expected {tuple(ACTION_SETS)}"
+        )
+    n = len(ACTION_SETS[action_set])
+    return n, n * STATE_DIM
+
+
+def action_set_for(num_actions: int) -> str:
+    """Name the action set with this many actions (used to read a checkpoint)."""
+    for name, deltas in ACTION_SETS.items():
+        if len(deltas) == num_actions:
+            return name
+    raise ValueError(f"no action set has {num_actions} actions")
+
 GAMMA_LIMIT_DEG = 70.0  # keep away from the vertical singularity
 
 
@@ -90,18 +132,49 @@ def step_point_mass(
     return [pos[0] + vx * dt, pos[1] + vy * dt, pos[2] + vz * dt]
 
 
+def energy_step(
+    v: float, new_gamma_deg: float, d_psi: float, throttle: float, dt: float = 1.0
+) -> float:
+    """Speed after one step of the energy model, clamped to the usable band.
+
+    ``dv/dt = throttle*THROTTLE_ACCEL - g*sin(gamma) - induced drag``: burner
+    buys speed, climbing spends it, and a hard turn bleeds it.  This is the
+    coupling that makes an energy fight an energy fight -- pull hard and you
+    slow down, unload and you get it back.
+    """
+    accel = (
+        throttle * THROTTLE_ACCEL
+        - G_ACCEL * math.sin(new_gamma_deg * DEG)
+        - TURN_BLEED * abs(d_psi) / 10.0
+    )
+    return max(V_MIN, min(V_MAX, v + accel * dt))
+
+
 def candidate_actions(
-    v: float, gamma_deg: float, psi_deg: float
+    v: float,
+    gamma_deg: float,
+    psi_deg: float,
+    action_set: str = DEFAULT_ACTION_SET,
+    dt: float = 1.0,
 ) -> List[List[float]]:
-    """The 9 candidate kinematic commands from the current command state.
+    """The candidate kinematic commands from the current command state.
 
     Climb angle is clamped to +/-GAMMA_LIMIT_DEG and heading wrapped, so the
-    command state cannot run away after many decisions.
+    command state cannot run away after many decisions.  ``legacy`` (the
+    default) returns the 9 constant-speed maneuvers of the original project;
+    ``energy`` returns 27 -- the same 9 crossed with burner/hold/idle -- and
+    propagates speed through ``energy_step``.
     """
+    if action_set not in ACTION_SETS:
+        raise ValueError(
+            f"unknown action set {action_set!r}, expected {tuple(ACTION_SETS)}"
+        )
     out = []
-    for d_gamma, d_psi in ACTION_DELTAS:
+    for delta in ACTION_SETS[action_set]:
+        d_gamma, d_psi = delta[0], delta[1]
         new_gamma = max(-GAMMA_LIMIT_DEG, min(GAMMA_LIMIT_DEG, gamma_deg + d_gamma))
-        out.append([v, new_gamma, wrap_heading(psi_deg + d_psi)])
+        new_v = v if len(delta) == 2 else energy_step(v, new_gamma, d_psi, delta[2], dt)
+        out.append([new_v, new_gamma, wrap_heading(psi_deg + d_psi)])
     return out
 
 
@@ -152,6 +225,7 @@ def build_network_input(
     act_b: Sequence[float],
     dt: float = 1.0,
     next_pos_b: Optional[Sequence[float]] = None,
+    action_set: str = DEFAULT_ACTION_SET,
 ) -> np.ndarray:
     """72-dim network input: normalized situations after each candidate maneuver.
 
@@ -164,7 +238,7 @@ def build_network_input(
     externally predicted position (see ``predictor.TurnRatePredictor``), the
     trajectory-prediction idea of Yoo/Kim/Shim (ICCAS 2021).
     """
-    cands = candidate_actions(act_r[0], act_r[1], act_r[2])
+    cands = candidate_actions(act_r[0], act_r[1], act_r[2], action_set, dt)
     next_b = list(next_pos_b) if next_pos_b is not None else step_point_mass(pos_b, act_b, dt)
     rows = []
     for cand in cands:

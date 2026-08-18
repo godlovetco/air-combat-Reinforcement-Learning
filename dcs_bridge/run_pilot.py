@@ -241,7 +241,8 @@ def main() -> None:
     if not args.heuristic:
         if os.path.exists(args.checkpoint):
             net = QNetwork.load(args.checkpoint)
-            log.info("policy loaded from %s", args.checkpoint)
+            log.info("policy loaded from %s (%s action set, %d actions)",
+                     args.checkpoint, net.action_set, net.num_actions)
         else:
             log.warning("checkpoint %r not found -- flying heuristic lead pursuit",
                         args.checkpoint)
@@ -311,6 +312,10 @@ def main() -> None:
         )
 
     gamma_cmd, psi_cmd = 0.0, 0.0
+    # Commanded TAS the policy owns while engaging with the energy action set;
+    # with the legacy set it stays at the order's target speed.
+    v_cmd = args.target_speed
+    net_action_set = net.action_set if net is not None else geo.DEFAULT_ACTION_SET
     have_cmd = False
     last_decision = -1e9
     last_log = 0.0
@@ -343,6 +348,7 @@ def main() -> None:
             g_own = own_gamma(own.tas, own.vv)
             if not have_cmd:
                 gamma_cmd, psi_cmd = g_own, own.heading
+                v_cmd = own.tas
                 have_cmd = True
 
             trigger = 0
@@ -465,16 +471,20 @@ def main() -> None:
                 if net is not None:
                     pred_next = predictor.predict(args.decision_period)
                     x = geo.build_network_input(
-                        list(own.pos), [own.tas, gamma_cmd, psi_cmd],
+                        list(own.pos), [v_cmd, gamma_cmd, psi_cmd],
                         list(telem.bandit.pos), list(act_b),
                         dt=args.decision_period,
                         next_pos_b=pred_next,
+                        action_set=net_action_set,
                     )
                     choice = net.act(x)
-                    d_gamma, d_psi = geo.ACTION_DELTAS[choice]
-                    gamma_cmd = max(-geo.GAMMA_LIMIT_DEG,
-                                    min(geo.GAMMA_LIMIT_DEG, gamma_cmd + d_gamma))
-                    psi_cmd = geo.wrap_heading(psi_cmd + d_psi)
+                    # The candidate the network picked *is* the new command
+                    # state, so the energy set's throttle axis lands on v_cmd
+                    # without a second code path.
+                    v_cmd, gamma_cmd, psi_cmd = geo.candidate_actions(
+                        v_cmd, gamma_cmd, psi_cmd,
+                        action_set=net_action_set, dt=args.decision_period,
+                    )[choice]
                 else:
                     aim = lead if lead is not None else telem.bandit.pos
                     gamma_cmd, psi_cmd = steer_to_point(own.pos, aim)
@@ -500,6 +510,10 @@ def main() -> None:
                         latest_wso.clear()
                         latest_wso.update(wso_sit)
 
+            if net_action_set != "legacy" and mode == "engage" and telem.bandit is not None:
+                speed_cmd = v_cmd   # the policy is managing energy
+            else:
+                v_cmd = speed_cmd   # keep the command state in sync when it is not
             controls = ap.command(
                 t=telem.t,
                 pitch_deg=own.pitch,

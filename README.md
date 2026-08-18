@@ -339,6 +339,33 @@ on a stationary problem. Self-play is *not* drawn by a plain `--opponent
 mixed`; weight it explicitly (`--mixed-weights "selfplay=3,pursuit=1,..."`)
 to fold it into a rehearsal curriculum.
 
+**Energy action set** (`--action-set energy`) is the fidelity upgrade the
+self-play numbers argued for. The original 9 maneuvers hold speed fixed, so
+every turn is free and a fight between equals decays into pure angles —
+which is why a mirror match ended `out_of_bounds` 92% of the time rather
+than resolving. The energy set crosses those 9 with a throttle axis
+(burner / hold / idle) for **27 actions**, and couples speed to the flight
+path:
+
+```
+dv/dt = throttle x 4.0 m/s^2  -  g sin(gamma)  -  3.0 m/s^2 x (turn / 10 deg)
+```
+
+Burner buys speed, climbing spends it, and a hard turn bleeds it — a 30°
+climb costs 4.9 m/s² against the 4.0 m/s² the engine buys, so you cannot
+climb and accelerate at once. Speed is clamped to 120–400 m/s. That is the
+energy-maneuverability trade the legacy action set had no way to express.
+
+The two action sets are separate model families: `energy` networks are
+216→27 instead of 72→9, so their checkpoints are **not interchangeable**
+(`--init` refuses a mismatch, and `run_pilot` reads the action set off the
+checkpoint's tensor shapes and drives the throttle loop from the policy's
+choice). `legacy` remains the default and is bit-for-bit unchanged; scripted
+bandits other than `straight` fly the same energy model at full throttle, so
+the fight stays fair, while `straight` keeps constant speed because constant
+everything *is* the classic profile. Energy-mode scores are therefore not
+comparable to legacy-mode scores.
+
 Note on the numbers below: `ace` was added as an attempt at a harder
 benchmark and did not turn out to be harder — the policy handled it at 0.99
 without ever having trained on it. Self-play is the benchmark that finally

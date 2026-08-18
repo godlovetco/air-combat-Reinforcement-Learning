@@ -8,6 +8,11 @@ The 9 outputs are Q-values for the 9 candidate maneuvers of
 ``geometry.ACTION_DELTAS``.  Implemented in numpy so the same file serves
 training (backprop on the chosen action) and real-time inference inside the
 DCS bridge with no ML-framework dependency.
+
+The shape is a default, not a constraint: the ``energy`` action set needs
+216 -> ... -> 27, so the layer sizes are constructor arguments and ``load``
+reads them back out of the checkpoint's tensor shapes.  Old checkpoints keep
+loading unchanged.
 """
 
 from __future__ import annotations
@@ -20,7 +25,8 @@ import numpy as np
 
 from .geometry import INPUT_DIM, NUM_ACTIONS
 
-LAYER_SIZES = (INPUT_DIM, 100, 30, NUM_ACTIONS)
+HIDDEN_SIZES = (100, 30)
+LAYER_SIZES = (INPUT_DIM, *HIDDEN_SIZES, NUM_ACTIONS)
 
 
 def _sigmoid(x: np.ndarray) -> np.ndarray:
@@ -35,11 +41,21 @@ def _sigmoid(x: np.ndarray) -> np.ndarray:
 class QNetwork:
     """Three-layer MLP with sigmoid hidden units and a linear head."""
 
-    def __init__(self, seed: Optional[int] = None):
+    def __init__(
+        self,
+        seed: Optional[int] = None,
+        input_dim: int = INPUT_DIM,
+        num_actions: int = NUM_ACTIONS,
+        hidden: Sequence[int] = HIDDEN_SIZES,
+    ):
         rng = np.random.default_rng(seed)
+        self.input_dim = int(input_dim)
+        self.num_actions = int(num_actions)
+        self.hidden = tuple(int(h) for h in hidden)
+        layer_sizes = (self.input_dim, *self.hidden, self.num_actions)
         self.params = {}
-        for i in range(len(LAYER_SIZES) - 1):
-            fan_in, fan_out = LAYER_SIZES[i], LAYER_SIZES[i + 1]
+        for i in range(len(layer_sizes) - 1):
+            fan_in, fan_out = layer_sizes[i], layer_sizes[i + 1]
             limit = np.sqrt(6.0 / (fan_in + fan_out))  # Xavier/Glorot uniform
             self.params[f"W{i}"] = rng.uniform(-limit, limit, (fan_in, fan_out))
             self.params[f"b{i}"] = np.zeros(fan_out)
@@ -48,7 +64,7 @@ class QNetwork:
     # Inference
     # ------------------------------------------------------------------ #
     def forward(self, x: np.ndarray, want_cache: bool = False):
-        """Q-values for a batch (N, 72) or single (72,) input."""
+        """Q-values for a batch (N, input_dim) or a single (input_dim,) input."""
         squeeze = x.ndim == 1
         a0 = np.atleast_2d(np.asarray(x, dtype=np.float64))
         z1 = a0 @ self.params["W0"] + self.params["b0"]
@@ -61,9 +77,9 @@ class QNetwork:
         return q[0] if squeeze else q
 
     def act(self, x: np.ndarray, epsilon: float = 0.0) -> int:
-        """Epsilon-greedy maneuver index for one 72-dim input."""
+        """Epsilon-greedy maneuver index for one input vector."""
         if epsilon > 0.0 and random.random() < epsilon:
-            return random.randrange(NUM_ACTIONS)
+            return random.randrange(self.num_actions)
         return int(np.argmax(self.forward(x)))
 
     # ------------------------------------------------------------------ #
@@ -79,7 +95,7 @@ class QNetwork:
         """One SGD step of Q-learning regression.
 
         Only the Q-value of the taken action is pulled toward its TD target;
-        gradients for the other 8 heads are zero.  Returns the batch MSE.
+        gradients for the other heads are zero.  Returns the batch MSE.
         """
         states = np.atleast_2d(states)
         n = states.shape[0]
@@ -123,8 +139,23 @@ class QNetwork:
 
     @classmethod
     def load(cls, path: str) -> "QNetwork":
-        net = cls(seed=0)
+        """Load a checkpoint, taking its layer sizes from the stored tensors."""
         with np.load(path) as data:
+            weights = sorted(k for k in data.files if k.startswith("W"))
+            if not weights or weights != [f"W{i}" for i in range(len(weights))]:
+                raise ValueError(f"checkpoint {path!r} has no usable weight tensors")
+            shapes = [data[k].shape for k in weights]
+            for i, shape in enumerate(shapes):
+                if len(shape) != 2:
+                    raise ValueError(f"checkpoint tensor 'W{i}' is not a matrix")
+                if i and shape[0] != shapes[i - 1][1]:
+                    raise ValueError(f"checkpoint tensor 'W{i}' does not chain from 'W{i-1}'")
+            net = cls(
+                seed=0,
+                input_dim=shapes[0][0],
+                num_actions=shapes[-1][1],
+                hidden=[s[1] for s in shapes[:-1]],
+            )
             for key in net.params:
                 if key not in data:
                     raise ValueError(f"checkpoint {path!r} is missing tensor {key!r}")
@@ -137,6 +168,13 @@ class QNetwork:
         return net
 
     def clone(self) -> "QNetwork":
-        other = QNetwork(seed=0)
+        other = QNetwork(seed=0, input_dim=self.input_dim,
+                         num_actions=self.num_actions, hidden=self.hidden)
         other.params = {k: v.copy() for k, v in self.params.items()}
         return other
+
+    @property
+    def action_set(self) -> str:
+        """Name of the geometry action set this network was built for."""
+        from .geometry import action_set_for
+        return action_set_for(self.num_actions)
