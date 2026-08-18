@@ -156,7 +156,8 @@ def train(args: argparse.Namespace) -> QNetwork:
 
         # DQN training oscillates; keep the best policy seen, not the last.
         if episode % args.eval_every == 0 and episode >= args.epsilon_decay_episodes // 2:
-            win, conv = evaluate(net, episodes=12, seed=args.seed + episode,
+            win, conv = evaluate(net, episodes=args.select_episodes,
+                                 seed=args.seed + episode,
                                  opponent=args.eval_opponent or args.opponent,
                                  bandit_policy=env.bandit_policy,
                                  mixed_weights=mixed_weights)
@@ -261,6 +262,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--log-every", type=int, default=10)
     p.add_argument("--eval-every", type=int, default=50, metavar="EPISODES",
                    help="periodic greedy eval; the best policy so far is what gets saved")
+    p.add_argument("--select-episodes", type=int, default=12, metavar="N",
+                   help="episodes per periodic eval used for best-checkpoint selection; "
+                        "raise it when --opponent mixed draws many behaviors, since a "
+                        "small sample makes the selection noisy")
     p.add_argument("--out", default="checkpoints/ucav_policy.npz")
     p.add_argument("--init", default=None, metavar="CHECKPOINT",
                    help="warm-start training from an existing checkpoint "
