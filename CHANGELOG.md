@@ -14,6 +14,10 @@ to follow [Semantic Versioning](https://semver.org/).
   episodes, and `--mixed-weights "selfplay=3,..."` folds it into the rehearsal
   curriculum. A plain `--opponent mixed` never draws self-play, so existing
   training commands behave exactly as before.
+- **`--select-episodes`**: sample size for the periodic greedy eval that picks
+  which weights get saved. It was hardcoded to 12, which is 2-3 samples per
+  behavior once the curriculum draws five — the selection was mostly noise.
+  Default unchanged at 12.
 - **`ace` adaptive opponent**: a bandit that presses the attack while it
   holds the angular advantage and breaks away when it loses it. Added as an
   attempt at a harder benchmark; measured at **0.99 / 1.00** against the
@@ -41,16 +45,35 @@ to follow [Semantic Versioning](https://semver.org/).
   forgetting during fine-tuning.
 
 ### Changed
-- **Upgraded the shipped policy** (`checkpoints/ucav_policy.npz`) through
-  successive rehearsal-curriculum stages. Final greedy eval over 400
-  randomized engagements per behavior on held-out seeds: **0.99 / 1.00**
-  win/conversion vs a straight bandit, **0.95 / 0.96** vs pure pursuit,
-  **0.99 / 1.00** vs evasive, **0.98 / 0.99** vs mixed. The pursuit axis —
-  a bandit that turns to fight — went 0.00 → 0.14 → 0.35 → **0.95** across
-  the curriculum stages while every other profile held or improved. This
-  also corrects an earlier claim in this project's docs that the
-  equal-speed pure-pursuit fight was inherently near-unwinnable: it was a
-  training gap, not a geometric limit.
+- **Upgraded the shipped policy** (`checkpoints/ucav_policy.npz`) again, and
+  added a second checkpoint. Greedy eval over 400 engagements per behavior on
+  each of **three** held-out seeds (mean shown), self-play scored against a
+  frozen copy of the previous shipped policy:
+
+  | Bandit | previous | `ucav_policy.npz` | `ucav_policy_robust.npz` |
+  |---|---|---|---|
+  | straight | 0.99 | **0.99** | 0.95 |
+  | pursuit | 0.94 | **0.98** | **0.99** |
+  | evasive | 1.00 | **1.00** | 0.96 |
+  | ace | 0.98 | **1.00** | 0.99 |
+  | mixed | 0.98 | **0.99** | 0.97 |
+  | self-play | 0.01 | **0.32** | **0.70** |
+
+  The default is a strict improvement — no scripted axis regresses (only the
+  straight-bandit *conversion* rate moves, 1.00 → 0.99). `ucav_policy_robust`
+  is the self-play-hardened alternative, selectable with `--checkpoint`: it
+  trades ~4 points against straight and evasive targets for more than double
+  the win rate against an opponent as capable as itself.
+- **Corrected an over-claim about the previous policy.** Its 0.94–1.00 scores
+  against scripted bandits did not mean it was strong: a policy trained
+  specifically against it reached 0.89, and it scored 0.01 against a frozen
+  copy of itself, with 92% of those engagements ending in `out_of_bounds`
+  rather than a resolution. The scripted-opponent scores largely measured how
+  predictable the opponents were.
+- Earlier docs claimed the pursuit axis had been lifted to 0.95 and that the
+  equal-speed pure-pursuit fight was not inherently unwinnable. The second
+  claim stands (it is now 0.98–0.99); the first is superseded by the table
+  above.
 - **Config file**: `--config ucav_pilot.toml` supplies options from a TOML
   file (keys mirror the CLI flags); command-line flags still override it.
   Ships `ucav_pilot.example.toml`. Uses stdlib `tomllib` on Python 3.11+ and

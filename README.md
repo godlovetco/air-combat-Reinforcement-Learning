@@ -339,46 +339,78 @@ on a stationary problem. Self-play is *not* drawn by a plain `--opponent
 mixed`; weight it explicitly (`--mixed-weights "selfplay=3,pursuit=1,..."`)
 to fold it into a rehearsal curriculum.
 
-Note on the numbers below: `ace` was added *after* the shipped policy was
-trained, as an attempt at a harder benchmark. It did not turn out to be
-harder — the policy handles it at 0.99 without ever having trained on it —
-so the hardest case remains the pure turning fight. `mixed` now draws
-`ace` too, so its score is not directly comparable to figures from before
-that change.
+Note on the numbers below: `ace` was added as an attempt at a harder
+benchmark and did not turn out to be harder — the policy handled it at 0.99
+without ever having trained on it. Self-play is the benchmark that finally
+separated the policies, so it is the one to watch.
 
 ```
 python -m dcs_bridge.train --episodes 2500 --opponent mixed --out checkpoints/ucav_policy.npz
 ```
 
-A trained checkpoint is committed at `checkpoints/ucav_policy.npz` so the
-DCS addon works out of the box. It is fine-tuned against **reactive
-opponents** through a **rehearsal curriculum** — `--init` from the previous
-policy with `--opponent mixed --mixed-weights "pursuit=5,straight=1,evasive=1"`,
-which drills the turning fight while rehearsing the other behaviors so
-nothing is forgotten. Greedy evaluation over 400 randomized engagements per
-behavior on **held-out seeds** never used for model selection (head-on merge
-±30° heading, ±800 m altitude offset, equal 250 m/s speeds):
+Two trained checkpoints are committed so the DCS addon works out of the box.
+Both are fine-tuned from the previous policy through a **rehearsal
+curriculum** (`--init` plus `--opponent mixed --mixed-weights ...`), which
+drills the weak axes while rehearsing the others so nothing is forgotten.
 
-| Bandit behavior | Win rate | Conversion rate |
-|---|---|---|
-| straight (classic profile) | **0.99** | **1.00** |
-| pursuit (turns to fight) | **0.95** | **0.96** |
-| evasive (breaks when threatened) | **0.99** | **1.00** |
-| ace (presses when winning, breaks when losing) | **0.99** | **1.00** |
-| mixed (randomized per episode) | **0.97** | **0.98** |
+Greedy evaluation, **400 randomized engagements per behavior on each of three
+held-out seeds** never used for model selection (head-on merge ±30° heading,
+±800 m altitude offset, equal 250 m/s speeds); the table shows the mean over
+the three seeds. The self-play column is scored against a frozen copy of the
+*previous* shipped policy — the champion each was trained to beat.
+
+| Bandit behavior | previous policy | **`ucav_policy.npz`** (default) | `ucav_policy_robust.npz` |
+|---|---|---|---|
+| straight (classic profile) | 0.99 | **0.99** | 0.95 |
+| pursuit (turns to fight) | 0.94 | **0.98** | **0.99** |
+| evasive (breaks when threatened) | 1.00 | **1.00** | 0.96 |
+| ace (presses when winning, breaks when losing) | 0.98 | **1.00** | 0.99 |
+| mixed (randomized per episode) | 0.98 | **0.99** | 0.97 |
+| **self-play vs the previous policy** | 0.01 | **0.32** | **0.70** |
 
 Win = gun envelope (<2,500 m, own aspect <30°, bandit aspect >30°, altitude
 advantage); conversion = established in the bandit's rear hemisphere (own
-aspect <30°, bandit aspect >150°).
+aspect <30°, bandit aspect >150°). Conversion rates track the win rates
+within 0.01–0.05 throughout and are omitted here for width; `--eval-episodes`
+prints both.
 
-The pursuit result is the notable one. The original straight-only-trained
-policy scored **0.00** against a bandit that turns to fight, and the
-curriculum lifted it 0.00 → 0.14 → 0.35 → **0.95**. Earlier revisions of
-this README described the equal-speed pure-pursuit fight as inherently
-near-unwinnable (a two-circle stalemate); that was wrong — it was a
-training gap, not a limit of the geometry. Given enough exposure to a
-turning opponent the policy learns to beat it while holding every other
-profile.
+**Which one to fly.** `ucav_policy.npz` is the default because it is a strict
+improvement — no scripted axis regresses (straight-bandit *conversion* is the
+only cell that moves, 1.00 → 0.99) while pursuit gains 4 points and self-play
+gains 31. `ucav_policy_robust.npz` is the self-play-hardened alternative:
+`--checkpoint checkpoints/ucav_policy_robust.npz` trades ~4 points against
+straight-flying and evasive targets for **more than double** the win rate
+against an opponent as capable as itself. Fly the robust one against human
+players or capable DCS AI; fly the default against everything else.
+
+Two results here are worth stating plainly because they cut against the
+earlier numbers in this file:
+
+1. **The old policy was not as strong as its scores suggested.** It beat every
+   scripted bandit at 0.94–1.00, but a policy trained specifically against it
+   reached **0.89**, and the old policy scored **0.01 against a frozen copy of
+   itself** — 92% of those engagements ended with someone leaving the arena
+   rather than a resolution. High scores against hand-written opponents mostly
+   measured how predictable those opponents were.
+2. **There is a real frontier, not a free lunch.** Six curriculum arms were
+   run. Pure self-play reached 0.89 on that axis but forgot everything else
+   (pursuit 0.94 → 0.06). Heavier self-play weighting reached 0.71–0.73 but
+   always cost 3–5 points on straight and evasive, and additional rehearsal of
+   exactly those two behaviors did not buy them back. The default checkpoint
+   sits at the no-regression end of that frontier; the robust checkpoint sits
+   further along it, and both are shipped rather than pretending the trade-off
+   does not exist.
+
+What made the difference between the arm that regressed everywhere and the one
+that improved everywhere was not the idea but its dosage: self-play at 1/5 of
+episodes instead of 3/6, learning rate 0.02 instead of 0.05, and a
+best-checkpoint selection sample of 40 episodes instead of 12 (with five
+behaviors in the draw, 12 episodes selects mostly on noise — hence
+`--select-episodes`).
+
+Earlier revisions of this README described the equal-speed pure-pursuit fight
+as inherently near-unwinnable (a two-circle stalemate); that was wrong — it
+was a training gap, not a limit of the geometry.
 
 ## Repository layout
 
