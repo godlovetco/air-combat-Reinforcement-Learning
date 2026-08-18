@@ -329,6 +329,16 @@ picks the behavior the periodic/final greedy evaluation scores against, and
 draw — a rehearsal curriculum that trains one behavior hard while
 rehearsing the others, so `--init` fine-tuning doesn't forget them.
 
+**Self-play** (`--opponent selfplay`) drops the scripted intents entirely
+and flies the bandit with a *frozen* policy checkpoint, chosen with
+`--selfplay-init` (default: a frozen copy of the learner's starting
+weights, i.e. "beat the current champion"). `--selfplay-refresh N` promotes
+the learner to be its own opponent every N episodes. The opponent is always
+frozen inside an episode — it never trains mid-fight — so the Q-targets stay
+on a stationary problem. Self-play is *not* drawn by a plain `--opponent
+mixed`; weight it explicitly (`--mixed-weights "selfplay=3,pursuit=1,..."`)
+to fold it into a rehearsal curriculum.
+
 Note on the numbers below: `ace` was added *after* the shipped policy was
 trained, as an attempt at a harder benchmark. It did not turn out to be
 harder — the policy handles it at 0.99 without ever having trained on it —

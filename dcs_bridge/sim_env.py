@@ -31,9 +31,12 @@ WIN_ASPECT = 30.0     # deg
 # 10 deg/step maneuver granularity so fights stay balanced and stable.
 BANDIT_TURN = 10.0    # deg/step max heading change
 BANDIT_GAMMA = 5.0    # deg/step max climb-angle change
-OPPONENTS = ("straight", "pursuit", "evasive", "ace", "mixed")
-# Behaviors a "mixed" episode may draw (everything except "mixed" itself).
+OPPONENTS = ("straight", "pursuit", "evasive", "ace", "selfplay", "mixed")
+# Behaviors a "mixed" episode may draw by default.  "selfplay" is deliberately
+# excluded: it needs a bandit policy, so it only enters a mixed draw when the
+# caller asks for it explicitly through ``mixed_weights``.
 MIXED_BEHAVIORS = ("straight", "pursuit", "evasive", "ace")
+MIXED_POOL = MIXED_BEHAVIORS + ("selfplay",)
 
 
 class UCAVSimEnv:
@@ -48,15 +51,21 @@ class UCAVSimEnv:
         seed: Optional[int] = None,
         opponent: str = "straight",
         mixed_weights: Optional[dict] = None,
+        bandit_policy=None,
     ):
         if opponent not in OPPONENTS:
             raise ValueError(f"unknown opponent {opponent!r}, expected {OPPONENTS}")
         if mixed_weights is not None:
-            bad = set(mixed_weights) - set(MIXED_BEHAVIORS)
+            bad = set(mixed_weights) - set(MIXED_POOL)
             if bad:
                 raise ValueError(f"unknown mixed_weights behaviors: {sorted(bad)}")
             if not any(w > 0 for w in mixed_weights.values()):
                 raise ValueError("mixed_weights must contain a positive weight")
+        wants_selfplay = opponent == "selfplay" or bool(
+            mixed_weights and mixed_weights.get("selfplay", 0.0) > 0
+        )
+        if wants_selfplay and bandit_policy is None:
+            raise ValueError("opponent 'selfplay' requires a bandit_policy")
         self.max_steps = max_steps
         self.dt = dt
         self.randomize = randomize
@@ -67,6 +76,10 @@ class UCAVSimEnv:
         # trains mostly the turning fight while rehearsing the others so
         # fine-tuning does not forget them.
         self.mixed_weights = mixed_weights
+        # Frozen network flying the bandit under "selfplay".  Kept as a plain
+        # attribute so a trainer can swap in a fresh snapshot of the learner
+        # between episodes (see UCAVSimEnv.set_bandit_policy).
+        self.bandit_policy = bandit_policy
         self.rng = random.Random(seed)
         self.reset()
 
@@ -88,12 +101,12 @@ class UCAVSimEnv:
 
         # Resolve "mixed" to a concrete behavior for this episode.
         if self.opponent == "mixed":
-            behaviors = MIXED_BEHAVIORS
             if self.mixed_weights:
+                behaviors = MIXED_POOL
                 weights = [self.mixed_weights.get(b, 0.0) for b in behaviors]
                 self._episode_opponent = self.rng.choices(behaviors, weights=weights)[0]
             else:
-                self._episode_opponent = self.rng.choice(behaviors)
+                self._episode_opponent = self.rng.choice(MIXED_BEHAVIORS)
         else:
             self._episode_opponent = self.opponent
 
@@ -111,9 +124,16 @@ class UCAVSimEnv:
         ``ace`` switches between the two by who currently holds the angular
         advantage -- it presses the attack when it is winning and breaks away
         when it is losing, which is a far harder fight than either alone.
+        ``selfplay`` hands the bandit to a frozen copy of the learned policy,
+        so the opponent is exactly as capable as the agent instead of running
+        a hand-written intent.
         """
         behavior = getattr(self, "_episode_opponent", "straight")
         if behavior == "straight":
+            return
+
+        if behavior == "selfplay":
+            self._update_bandit_selfplay()
             return
 
         dx = self.pos_r[0] - self.pos_b[0]
@@ -157,6 +177,18 @@ class UCAVSimEnv:
         gamma_b = gamma_b + max(-BANDIT_GAMMA, min(BANDIT_GAMMA, desired_gamma - gamma_b))
         gamma_b = max(-geo.GAMMA_LIMIT_DEG, min(geo.GAMMA_LIMIT_DEG, gamma_b))
         self.act_b = [v_b, gamma_b, psi_b]
+
+    def _update_bandit_selfplay(self) -> None:
+        """Fly the bandit with the frozen policy, from the bandit's own seat."""
+        obs = geo.build_network_input(
+            self.pos_b, self.act_b, self.pos_r, self.act_r, self.dt
+        )
+        action = self.bandit_policy.act(obs)
+        self.act_b = geo.candidate_actions(*self.act_b)[action]
+
+    def set_bandit_policy(self, net) -> None:
+        """Swap the frozen self-play opponent (e.g. a newer learner snapshot)."""
+        self.bandit_policy = net
 
     def _obs(self) -> np.ndarray:
         return geo.build_network_input(

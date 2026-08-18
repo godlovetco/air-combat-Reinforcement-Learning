@@ -43,23 +43,47 @@ def parse_mixed_weights(spec):
     return weights
 
 
+def selfplay_policy(args: argparse.Namespace, net: QNetwork, mixed_weights):
+    """Frozen opponent network for self-play, or ``None`` if unused.
+
+    Priority: an explicit ``--selfplay-init`` checkpoint, otherwise a frozen
+    copy of the learner's starting weights (which, with ``--init``, is the
+    shipped policy -- i.e. "beat the current champion").
+    """
+    wants = args.opponent == "selfplay" or bool(
+        mixed_weights and mixed_weights.get("selfplay", 0.0) > 0
+    ) or (args.eval_opponent == "selfplay")
+    if not wants:
+        return None
+    init = getattr(args, "selfplay_init", None)
+    if init:
+        print(f"self-play opponent: {init}")
+        return QNetwork.load(init)
+    print("self-play opponent: frozen copy of the starting weights")
+    return net.clone()
+
+
 def train(args: argparse.Namespace) -> QNetwork:
     random.seed(args.seed)
     np.random.seed(args.seed)
 
+    if args.init:
+        net = QNetwork.load(args.init)  # warm-start / fine-tune from a checkpoint
+        print(f"warm-starting from {args.init}")
+    else:
+        net = QNetwork(seed=args.seed)
+
+    mixed_weights = parse_mixed_weights(getattr(args, "mixed_weights", None))
+    bandit_policy = selfplay_policy(args, net, mixed_weights)
     env = UCAVSimEnv(
         max_steps=args.max_steps,
         randomize=not args.fixed_start,
         shaping=args.shaping,
         seed=args.seed,
         opponent=args.opponent,
-        mixed_weights=parse_mixed_weights(getattr(args, "mixed_weights", None)),
+        mixed_weights=mixed_weights,
+        bandit_policy=bandit_policy,
     )
-    if args.init:
-        net = QNetwork.load(args.init)  # warm-start / fine-tune from a checkpoint
-        print(f"warm-starting from {args.init}")
-    else:
-        net = QNetwork(seed=args.seed)
     target_net = net.clone()
     buffer: Deque[Transition] = collections.deque(maxlen=args.buffer_size)
 
@@ -100,6 +124,14 @@ def train(args: argparse.Namespace) -> QNetwork:
         if episode % args.target_sync == 0:
             target_net = net.clone()
 
+        # Self-play curriculum: promote the learner to be its own opponent
+        # every N episodes.  The opponent is always a *frozen* snapshot -- it
+        # never trains mid-episode, which keeps the fight stationary enough
+        # for the Q-targets to mean anything.
+        if args.selfplay_refresh and env.bandit_policy is not None \
+                and episode % args.selfplay_refresh == 0:
+            env.set_bandit_policy(net.clone())
+
         outcomes.append(info.get("outcome"))
         win_rate = sum(1 for o in outcomes if o == "win") / len(outcomes)
         history.append(
@@ -125,7 +157,9 @@ def train(args: argparse.Namespace) -> QNetwork:
         # DQN training oscillates; keep the best policy seen, not the last.
         if episode % args.eval_every == 0 and episode >= args.epsilon_decay_episodes // 2:
             win, conv = evaluate(net, episodes=12, seed=args.seed + episode,
-                                 opponent=args.eval_opponent or args.opponent)
+                                 opponent=args.eval_opponent or args.opponent,
+                                 bandit_policy=env.bandit_policy,
+                                 mixed_weights=mixed_weights)
             score = win + 0.5 * conv
             if score > best_score:
                 best_score = score
@@ -152,7 +186,8 @@ def train(args: argparse.Namespace) -> QNetwork:
 
 
 def evaluate(net: QNetwork, episodes: int = 20, seed: int = 1234,
-             opponent: str = "straight"):
+             opponent: str = "straight", bandit_policy=None,
+             mixed_weights=None):
     """Greedy evaluation.
 
     Returns ``(win_rate, conversion_rate)``.  A "conversion" ends the episode
@@ -164,7 +199,13 @@ def evaluate(net: QNetwork, episodes: int = 20, seed: int = 1234,
     """
     from .geometry import situation
 
-    env = UCAVSimEnv(randomize=True, shaping=0.0, seed=seed, opponent=opponent)
+    needs_policy = opponent == "selfplay" or bool(
+        mixed_weights and mixed_weights.get("selfplay", 0.0) > 0
+    )
+    if needs_policy and bandit_policy is None:
+        bandit_policy = net.clone()  # mirror match against a frozen copy of itself
+    env = UCAVSimEnv(randomize=True, shaping=0.0, seed=seed, opponent=opponent,
+                     mixed_weights=mixed_weights, bandit_policy=bandit_policy)
     wins = 0
     conversions = 0
     for _ in range(episodes):
@@ -198,15 +239,22 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--shaping", type=float, default=0.05,
                    help="weight of the dense angular-advantage reward (0 = off)")
     p.add_argument("--opponent", default="straight",
-                   choices=["straight", "pursuit", "evasive", "ace", "mixed"],
+                   choices=["straight", "pursuit", "evasive", "ace", "selfplay", "mixed"],
                    help="bandit behavior during training (mixed = randomized per episode)")
     p.add_argument("--eval-opponent", default=None,
-                   choices=["straight", "pursuit", "evasive", "ace", "mixed"],
+                   choices=["straight", "pursuit", "evasive", "ace", "selfplay", "mixed"],
                    help="bandit behavior for periodic/final eval (default: same as --opponent)")
     p.add_argument("--mixed-weights", default=None, metavar="SPEC",
                    help="per-episode behavior weights for --opponent mixed, e.g. "
                         "'pursuit=3,straight=1,evasive=1' (rehearsal curriculum); "
-                        "default = uniform")
+                        "'selfplay' is only drawn if you weight it explicitly; "
+                        "default = uniform over the scripted behaviors")
+    p.add_argument("--selfplay-init", default=None, metavar="CHECKPOINT",
+                   help="checkpoint that flies the bandit under --opponent selfplay "
+                        "(default: a frozen copy of the learner's starting weights)")
+    p.add_argument("--selfplay-refresh", type=int, default=0, metavar="EPISODES",
+                   help="promote the learner to be its own frozen opponent every N "
+                        "episodes (0 = keep the original self-play opponent)")
     p.add_argument("--fixed-start", action="store_true",
                    help="use the exact legacy head-on start instead of randomized geometry")
     p.add_argument("--seed", type=int, default=7)
@@ -228,7 +276,10 @@ def main() -> None:
     if args.eval_episodes:
         net = QNetwork.load(args.out)  # the best policy is what was saved
         opp = args.eval_opponent or args.opponent
-        win_rate, conversion_rate = evaluate(net, args.eval_episodes, opponent=opp)
+        bandit = QNetwork.load(args.selfplay_init) if args.selfplay_init else None
+        win_rate, conversion_rate = evaluate(
+            net, args.eval_episodes, opponent=opp, bandit_policy=bandit,
+            mixed_weights=parse_mixed_weights(args.mixed_weights))
         print(
             f"greedy evaluation over {args.eval_episodes} episodes vs {opp}: "
             f"win rate {win_rate:.2f}, conversion rate {conversion_rate:.2f}"

@@ -6,6 +6,14 @@ to follow [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- **Self-play opponent** (`--opponent selfplay`): the bandit is flown by a
+  *frozen* policy checkpoint instead of a scripted intent, so the opponent is
+  exactly as capable as the agent. `--selfplay-init` picks the checkpoint
+  (default: a frozen copy of the learner's starting weights),
+  `--selfplay-refresh N` promotes the learner to be its own opponent every N
+  episodes, and `--mixed-weights "selfplay=3,..."` folds it into the rehearsal
+  curriculum. A plain `--opponent mixed` never draws self-play, so existing
+  training commands behave exactly as before.
 - **`ace` adaptive opponent**: a bandit that presses the attack while it
   holds the angular advantage and breaks away when it loses it. Added as an
   attempt at a harder benchmark; measured at **0.99 / 1.00** against the

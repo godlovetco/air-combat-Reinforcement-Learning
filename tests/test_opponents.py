@@ -124,6 +124,117 @@ class OpponentTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             parse_mixed_weights("pursuit")
 
+    # ---------------------------------------------------------------- #
+    # Self-play
+    # ---------------------------------------------------------------- #
+    def test_selfplay_requires_a_bandit_policy(self):
+        with self.assertRaises(ValueError):
+            UCAVSimEnv(opponent="selfplay")
+        with self.assertRaises(ValueError):
+            UCAVSimEnv(opponent="mixed", mixed_weights={"selfplay": 1})
+
+    def test_selfplay_bandit_flies_the_given_policy(self):
+        from dcs_bridge.geometry import ACTION_DELTAS
+
+        class FixedPolicy:
+            """Always commands maneuver 0: climb harder, turn right."""
+
+            def act(self, obs, epsilon=0.0):
+                return 0
+
+        env = UCAVSimEnv(randomize=False, shaping=0.0, seed=21,
+                         opponent="selfplay", bandit_policy=FixedPolicy())
+        env.pos_b = [100_000.0, 100_000.0, 3_000.0]
+        env.act_b = [250.0, 0.0, 0.0]
+        d_gamma, d_psi = ACTION_DELTAS[0]
+        env.step(4)
+        self.assertAlmostEqual(env.act_b[1], d_gamma, places=6)
+        self.assertAlmostEqual(env.act_b[2], d_psi, places=6)
+
+    def test_set_bandit_policy_swaps_the_opponent(self):
+        class Left:
+            def act(self, obs, epsilon=0.0):
+                return 5  # hold climb, turn left
+
+        class Right:
+            def act(self, obs, epsilon=0.0):
+                return 3  # hold climb, turn right
+
+        env = UCAVSimEnv(randomize=False, shaping=0.0, seed=22,
+                         opponent="selfplay", bandit_policy=Left())
+        env.act_b = [250.0, 0.0, 0.0]
+        env.step(4)
+        self.assertLess(geo.heading_error(env.act_b[2], 0.0), 0.0)
+        env.set_bandit_policy(Right())
+        before = env.act_b[2]
+        env.step(4)
+        self.assertGreater(geo.heading_error(env.act_b[2], before), 0.0)
+
+    def test_selfplay_not_drawn_by_plain_mixed(self):
+        # "mixed" without weights must stay policy-free (no bandit_policy needed).
+        env = UCAVSimEnv(randomize=True, shaping=0.0, seed=23, opponent="mixed")
+        for _ in range(60):
+            env.reset()
+            self.assertNotEqual(env._episode_opponent, "selfplay")
+
+    def test_selfplay_enters_mixed_when_weighted(self):
+        class Hold:
+            def act(self, obs, epsilon=0.0):
+                return 4
+
+        env = UCAVSimEnv(randomize=True, shaping=0.0, seed=24, opponent="mixed",
+                         mixed_weights={"selfplay": 1}, bandit_policy=Hold())
+        env.reset()
+        self.assertEqual(env._episode_opponent, "selfplay")
+
+    def test_selfplay_episode_runs_to_completion(self):
+        from dcs_bridge.policy import QNetwork
+
+        net = QNetwork(seed=3)
+        env = UCAVSimEnv(randomize=True, shaping=0.05, seed=25,
+                         opponent="selfplay", bandit_policy=net.clone())
+        obs = env.reset()
+        done, steps, info = False, 0, {}
+        while not done and steps < env.max_steps + 1:
+            obs, _r, done, info = env.step(net.act(obs))
+            steps += 1
+        self.assertTrue(done)
+        self.assertIn(info["outcome"], ("win", "loss", "out_of_bounds", "timeout"))
+
+    def test_evaluate_selfplay_defaults_to_a_mirror_match(self):
+        from dcs_bridge.policy import QNetwork
+        from dcs_bridge.train import evaluate
+
+        net = QNetwork(seed=4)
+        win, conv = evaluate(net, episodes=2, seed=26, opponent="selfplay")
+        self.assertGreaterEqual(win, 0.0)
+        self.assertLessEqual(conv, 1.0)
+
+    def test_selfplay_policy_resolution(self):
+        from dcs_bridge.train import build_parser, selfplay_policy
+        from dcs_bridge.policy import QNetwork
+
+        net = QNetwork(seed=5)
+        parse = build_parser().parse_args
+
+        # Not requested -> no opponent network is built.
+        self.assertIsNone(selfplay_policy(parse([]), net, None))
+        self.assertIsNone(
+            selfplay_policy(parse(["--opponent", "mixed"]), net, {"pursuit": 1})
+        )
+
+        # Requested three ways -> a frozen copy of the starting weights.
+        for args, weights in (
+            (parse(["--opponent", "selfplay"]), None),
+            (parse(["--opponent", "mixed"]), {"selfplay": 1}),
+            (parse(["--eval-opponent", "selfplay"]), None),
+        ):
+            frozen = selfplay_policy(args, net, weights)
+            self.assertIsNotNone(frozen)
+            self.assertIsNot(frozen, net)
+            for key, value in net.params.items():
+                self.assertTrue((frozen.params[key] == value).all())
+
     def test_reactive_episode_runs_to_completion(self):
         env = UCAVSimEnv(randomize=True, shaping=0.05, seed=6, opponent="mixed")
         obs = env.reset()
