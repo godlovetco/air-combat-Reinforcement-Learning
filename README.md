@@ -523,37 +523,50 @@ array. The edge that does appear grows with start range, which is where the
 extra detection range can be spent. Reported as measured rather than tuned
 until it looked better.
 
-**Scripted still beats learned.** A twenty-line hand-flown timeline — notch the
-missile, crank while supporting your own shot, otherwise commit — is ahead of
-every trained policy so far. Win rate / survival rate over 150 engagements per
-cell on a held-out seed:
+**The BVR pilot is scripted, and that is a result, not a placeholder.**
+`dcs_bridge/bvr_pilot.py` flies the timeline: defend a guiding missile by
+beaming *it* (not the jet that fired it — those bearings diverge as the round
+closes), support your own shot by cranking as far off the target as the antenna
+tolerates, otherwise commit. Twenty lines, three strictly-ordered states.
+
+Every reinforcement-learning policy trained against this environment lost to
+it. Win rate / survival rate over **400 engagements per cell on each of two
+held-out seeds**:
 
 | agent | straight | pursuit | evasive | ace |
 |---|---|---|---|---|
 | uniform random actions | 0.09/0.87 | 0.21/0.93 | 0.00/0.83 | 0.00/0.94 |
 | always hot (fly at the bandit) | 0.31/0.31 | 0.54/0.54 | 0.00/0.07 | 0.00/0.99 |
-| **hand-flown timeline** | **0.94**/1.00 | **0.99**/1.00 | 0.07/0.99 | 0.00/1.00 |
-| RL, trained on mixed | 0.19/0.41 | 0.24/0.36 | 0.06/0.25 | 0.05/0.99 |
-| RL, trained on `ace` | 0.34/0.65 | 0.58/0.68 | 0.03/0.44 | 0.00/1.00 |
+| **`TimelinePilot` (shipped)** | **0.96**/1.00 | **1.00**/1.00 | **0.13**/0.98 | 0.00/1.00 |
+| best RL policy | 0.61/0.88 | 0.80/0.86 | 0.09/0.64 | 0.01/0.98 |
 
 The two floors are worth as much as the ceiling. Uniform random actions almost
 never score but survive 83–94% of the time — a target that maneuvers
-unpredictably is hard to lock — so survival alone is a cheap number and should
-never be read on its own. Flying straight at the bandit converts 0.31 and 0.54
-but survives 0.31 and 0.07: pressing without defending is how you die. A useful
-policy has to beat *both*, and only one of the trained ones beats "always hot"
-at all.
+unpredictably is hard to lock — so survival read on its own is a cheap number.
+Flying straight at the bandit converts 0.31 and 0.54 but survives 0.31 and
+0.07: pressing without defending is how you die. A useful policy has to beat
+both, and the learned ones only just do.
 
-The first diagnosis was an observation bug: the block announced that a missile
-was inbound and how long it had, and never said *where* it was, so a maneuver
-defined relative to the threat was unlearnable. Adding bearing and notch depth
-moved the straight column 0.07 → 0.19 and 0.22 → 0.34 — real, and not enough.
+Getting the RL policy even that far took two fixes, both of which were bugs
+rather than tuning:
 
-The second is a selection bug, still being measured: checkpoints were being
-chosen by greedy evaluation against `ace`, where *nothing* scores — the scripted
-timeline included — so the selection signal was almost entirely survival, which
-rewards hiding. That would explain policies that survive against `ace` and
-forget how to kill a straight-flier.
+* **The observation did not locate the threat.** It announced that a missile
+  was inbound and how long it had, and never said *where* it was — so a
+  maneuver defined relative to the threat was unlearnable. Adding bearing and
+  notch depth moved the straight column 0.07 → 0.19.
+* **Checkpoints were selected against `ace`, where nothing scores** — the
+  scripted pilot included. That left survival as almost the entire selection
+  signal, which rewards hiding. Selecting on the training mixture instead moved
+  straight 0.34 → 0.65 and pursuit 0.58 → 0.79 with no other change.
+
+Tripling the training budget after that made things *worse* (straight 0.65 →
+0.51, and survival against `ace` 1.00 → 0.68), which is the usual DQN story and
+not something more episodes will fix.
+
+So the scripted pilot ships and the learned one does not. An earlier revision
+of this section claimed the RL policy had overtaken the timeline on the
+`evasive` and `ace` columns; that was a 150-episode sample and did not survive
+being re-run at 400.
 
 Note also that the `evasive` and `ace` columns are near zero *for every agent
 including the scripted one*: two pilots who both notch correctly tend to end
@@ -569,6 +582,7 @@ dcs-addon/                Lua export addon for DCS World
 dcs_bridge/               Python package (numpy; anthropic for the radio)
   bvr.py                    BVR physics: radar/notch, weapon envelope, missiles
   bvr_env.py                BVR 1v1 arena (70 km start, missile timeline)
+  bvr_pilot.py              scripted BVR pilot (defend / support / commit)
   geometry.py               combat geometry & the legacy 72-dim network input
   policy.py                 Q-network (72→100→30→9), training + inference
   predictor.py              constant-turn-rate target trajectory prediction

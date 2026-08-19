@@ -21,13 +21,27 @@ to follow [Semantic Versioning](https://semver.org/).
     RWR, and a 15-wide observation block (locks, spike, rounds remaining,
     what is in the air, support owed, envelope flags, threat bearing and notch
     depth). `evaluate` reports **survival** rather than conversion here.
+  - `bvr_pilot.py` — **`TimelinePilot`**, the scripted BVR pilot that ships:
+    defend a guiding missile by beaming it, support your own shot by cranking,
+    otherwise commit. Over 400 engagements per cell on two held-out seeds it
+    scores 0.96 / 1.00 / 0.13 / 0.00 against straight / pursuit / evasive / ace
+    with survival 1.00, 1.00, 0.98, 1.00 — beating every RL policy trained
+    against the environment on every axis.
+  - **WSO BVR calls** — the back-seater now calls the missile fight: spike,
+    defend with the threat's clock position and the shorter notch direction,
+    support countdown, pitbull, shoot / hold-for-the-NEZ, winchester.
   - Measured, and reported as measured: an AESA is worth very little in a
     symmetric 1v1 (0.05 vs 0.06, 0.14 vs 0.15 across a notch-precision sweep),
     because what defeats a shot is the missile *seeker's* notch gate, which
     does not inherit the launching aircraft's array. And a twenty-line
-    hand-flown timeline still beats the trained policies (0.94 vs 0.07 on a
-    straight bandit) — the first diagnosis was an observation bug, now fixed,
-    but the gap has not yet been re-measured.
+    scripted timeline beats every trained policy on every axis (0.96 vs 0.61 on
+    a straight bandit, verified at 400 engagements on two held-out seeds), so
+    the scripted pilot is what ships. Two real bugs were found on the way — the
+    observation never told the policy *where* the incoming missile was, and
+    checkpoint selection ran against an opponent nobody scores against, leaving
+    survival as the whole signal — and fixing both moved the straight column
+    0.07 → 0.65 without closing the gap. Tripling the training budget after
+    that made it worse.
 - **Energy action set** (`--action-set energy`): the 9 legacy maneuvers crossed
   with a throttle axis (burner / hold / idle) for 27 actions, with speed coupled
   to the flight path — `dv/dt = throttle*4.0 - g*sin(gamma) - 3.0*(turn/10 deg)`,
