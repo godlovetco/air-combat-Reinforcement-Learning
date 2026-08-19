@@ -452,6 +452,101 @@ The remaining 40% are genuine stalemates — two equally matched fighters in a
 turning fight that neither converts — which is a real outcome rather than an
 artifact of the box.
 
+## Beyond-visual-range engagement (BVR)
+
+Everything above models a gun fight: close to 10 km, convert to the bandit's
+six, take the shot. A BVR fight is a different problem, decided long before
+anyone points at anyone — by radar, weapon envelope and missile timeline.
+`dcs_bridge/bvr.py` is the physics and `dcs_bridge/bvr_env.py` is the arena;
+`--engagement bvr` trains against it.
+
+**Radar.** Two array types, differing in the four places that change how the
+fight is flown:
+
+| | mechanically scanned | AESA |
+|---|---|---|
+| detection range | 90 km | 135 km |
+| Doppler notch gate | 50 m/s | 30 m/s |
+| re-acquisition after a lost track | 3.0 s | 0.5 s |
+| missiles guided at once | 1 | 4 |
+| heard by the target's RWR at | 180 km | 68 km |
+
+That last row is the tactical argument for the technology. A warning receiver
+only listens one way while a radar needs the return trip, so a conventional
+set announces itself at twice its own detection range — *spiked before seen* is
+the normal state of affairs. An LPI array inverts it and can hold a track from
+outside the range its emissions register at.
+
+The notch is modeled on the **target's** radial velocity, not on total closure.
+This matters: a target beaming the antenna disappears into the ground clutter
+no matter how fast the shooter is closing, and modeling it off closure would
+have made notching impossible against a fast shooter — backwards.
+
+**Weapons.** Three, because they impose different fights:
+
+| | reach (head-on, 9 km) | no-escape zone | notes |
+|---|---|---|---|
+| `ARH-medium` | 64 km | 23 km | the workhorse |
+| `ARH-long` | 110 km | 55 km | ramjet; the NEZ is large enough that turning and running stops working |
+| `IR-short` | 17 km | 7 km | fire-and-forget, immune to notching, has to be carried to the merge |
+
+`WeaponEngagementZone` carries Rmax / **Rtr** / Rne / Rmin and time of flight.
+Rtr — the reach against a target that reverses the instant you shoot — is the
+band that decides whether a shot is worth taking at all.
+
+**Missiles in flight** are inertial on the launcher's radar until the seeker
+goes active, then self-guiding. Three ways to defeat one, all tested: break the
+supporting lock before pitbull, hold the beam on it after, or outrun its energy.
+A notched seeker is *not* dead — it coasts on its last solution for
+`seeker_memory` seconds and reacquires if the target leaves the notch, so a
+notch is a timing problem rather than a switch.
+
+**The arena** starts 70 km apart head-on, carries per-side radars and loadouts
+so an AESA-versus-mechanical matchup is expressible, and ends on a missile hit,
+a merge (both sides Winchester inside 9 km), a departure or a timeout.
+
+*When* to shoot is a rule — locked, inside the envelope, prefer the no-escape
+zone, respect trigger discipline and the array's track capacity — because that
+part is well understood. *How to fly* is what the policy learns, and the
+observation carries a 15-wide block for it: locks, RWR spike, rounds remaining
+on both sides, what is in the air, support still owed, envelope flags, and the
+threat's bearing and notch depth.
+
+### Two results worth reading before trusting the numbers
+
+**An AESA is worth very little in a symmetric 1v1.** Sweeping how precisely the
+bandit beams, the same hand-flown agent scores 0.05 with a mechanical set and
+0.06 with an AESA; at a sloppier notch, 0.14 against 0.15. The reason is
+structural rather than a tuning miss: what defeats a shot is the *missile
+seeker's* notch gate, and a seeker does not inherit the launching aircraft's
+array. The edge that does appear grows with start range, which is where the
+extra detection range can be spent. Reported as measured rather than tuned
+until it looked better.
+
+**Scripted beats learned, so far.** A twenty-line hand-flown timeline — notch
+the missile, crank while supporting your own shot, otherwise commit — is still
+ahead of the trained policies:
+
+| agent | straight | pursuit | evasive | ace |
+|---|---|---|---|---|
+| random policy | 0.00 | 0.00 | 0.00 | 0.00 |
+| **hand-flown timeline** | **0.94** | **0.99** | 0.07 | 0.00 |
+| trained on mixed | 0.07 | 0.13 | 0.02 | 0.04 |
+| trained on `ace` only | 0.22 | 0.35 | 0.03 | 0.03 |
+
+Win rate over 150 engagements per cell on a held-out seed. The first diagnosis
+was an observation bug — the block announced that a missile was inbound and how
+long it had, and never said *where* it was, so the policy had no way to learn a
+maneuver defined relative to the threat. Bearing and notch depth are in the
+block now. Whether that closes the gap is a measurement, and until it is
+re-run, the honest summary is that the scripted baseline is the thing to beat
+and has not been beaten.
+
+Note also that the `evasive` and `ace` columns are near zero *for every agent
+including the scripted one*: two pilots who both notch correctly tend to end
+BVR at the merge. That is a real dynamic rather than an artifact, and it is why
+`merge` is its own outcome rather than being scored as a draw-shaped win.
+
 ## Repository layout
 
 ```
@@ -459,6 +554,8 @@ dcs-addon/                Lua export addon for DCS World
   Export.lua                loader stub for Saved Games\DCS\Scripts\
   Scripts/UCAVPilot/        the export script (telemetry out, commands in)
 dcs_bridge/               Python package (numpy; anthropic for the radio)
+  bvr.py                    BVR physics: radar/notch, weapon envelope, missiles
+  bvr_env.py                BVR 1v1 arena (70 km start, missile timeline)
   geometry.py               combat geometry & the legacy 72-dim network input
   policy.py                 Q-network (72→100→30→9), training + inference
   predictor.py              constant-turn-rate target trajectory prediction

@@ -6,6 +6,28 @@ to follow [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- **Beyond-visual-range engagement** (`--engagement bvr`): a second engagement
+  type with its own physics module and arena.
+  - `bvr.py` — typed radars (mechanically-scanned vs **AESA**, differing in
+    detection range, Doppler notch width, re-acquisition time, simultaneous
+    tracks, and the RWR asymmetry that makes LPI worth having); a **weapon
+    engagement zone** with Rmax/Rtr/Rne/Rmin and time of flight; a **missile
+    catalog** (medium ARH, ramjet ARH, IR) and missiles in flight that are
+    inertial on the launcher's radar until pitbull, coast on seeker memory when
+    notched, and can be defeated by breaking the mid-course lock, holding the
+    beam, or outrunning their energy.
+  - `bvr_env.py` — 70 km head-on arena with per-side radars and loadouts,
+    rule-based shot selection, an `ace` bandit that flies the timeline off its
+    RWR, and a 15-wide observation block (locks, spike, rounds remaining,
+    what is in the air, support owed, envelope flags, threat bearing and notch
+    depth). `evaluate` reports **survival** rather than conversion here.
+  - Measured, and reported as measured: an AESA is worth very little in a
+    symmetric 1v1 (0.05 vs 0.06, 0.14 vs 0.15 across a notch-precision sweep),
+    because what defeats a shot is the missile *seeker's* notch gate, which
+    does not inherit the launching aircraft's array. And a twenty-line
+    hand-flown timeline still beats the trained policies (0.94 vs 0.07 on a
+    straight bandit) — the first diagnosis was an observation bug, now fixed,
+    but the gap has not yet been re-measured.
 - **Energy action set** (`--action-set energy`): the 9 legacy maneuvers crossed
   with a throttle axis (burner / hold / idle) for 27 actions, with speed coupled
   to the flight path — `dv/dt = throttle*4.0 - g*sin(gamma) - 3.0*(turn/10 deg)`,
