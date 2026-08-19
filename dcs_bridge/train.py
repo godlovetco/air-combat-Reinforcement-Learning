@@ -24,8 +24,28 @@ from typing import Deque, Tuple
 import numpy as np
 
 from . import geometry as geo
+from .bvr_env import BVRSimEnv, observation_dim as bvr_observation_dim
 from .policy import HIDDEN_SIZES, QNetwork
 from .sim_env import UCAVSimEnv
+
+ENGAGEMENTS = ("wvr", "bvr")
+
+
+def network_dims(action_set: str, engagement: str = "wvr"):
+    """``(num_actions, input_dim)`` for an action set / engagement pair."""
+    if engagement not in ENGAGEMENTS:
+        raise ValueError(f"unknown engagement {engagement!r}, expected {ENGAGEMENTS}")
+    num_actions, input_dim = geo.action_set_dims(action_set)
+    if engagement == "bvr":
+        input_dim = bvr_observation_dim(action_set)
+    return num_actions, input_dim
+
+
+def make_env(engagement: str, **kwargs):
+    """The environment for an engagement type; same call surface either way."""
+    if engagement == "bvr":
+        return BVRSimEnv(**kwargs)
+    return UCAVSimEnv(**kwargs)
 
 Transition = Tuple[np.ndarray, int, float, np.ndarray, bool]
 
@@ -59,13 +79,17 @@ def parse_hidden(spec):
 
 def build_network(args: argparse.Namespace) -> QNetwork:
     """Warm-start from ``--init`` or build a fresh net for ``--action-set``."""
-    num_actions, input_dim = geo.action_set_dims(args.action_set)
+    engagement = getattr(args, "engagement", "wvr")
+    num_actions, input_dim = network_dims(args.action_set, engagement)
     if getattr(args, "transfer_init", None):
         if args.init:
             raise ValueError("use either --init or --transfer-init, not both")
         if args.action_set != "energy":
             raise ValueError("--transfer-init lifts a legacy policy into the "
                              "energy action set; pass --action-set energy")
+        if engagement != "wvr":
+            raise ValueError("--transfer-init lifts a within-visual-range policy; "
+                             "a BVR network has a different input width")
         legacy = QNetwork.load(args.transfer_init)
         if legacy.action_set != "legacy":
             raise ValueError(
@@ -81,6 +105,12 @@ def build_network(args: argparse.Namespace) -> QNetwork:
                 f"--init checkpoint {args.init!r} has {net.num_actions} actions "
                 f"({net.action_set!r} action set) but --action-set is "
                 f"{args.action_set!r} ({num_actions} actions)"
+            )
+        if net.input_dim != input_dim:
+            raise ValueError(
+                f"--init checkpoint {args.init!r} takes a {net.input_dim}-wide "
+                f"input but --engagement {engagement!r} on this action set needs "
+                f"{input_dim}"
             )
         print(f"warm-starting from {args.init}")
         return net
@@ -108,6 +138,15 @@ def selfplay_policy(args: argparse.Namespace, net: QNetwork, mixed_weights):
     return net.clone()
 
 
+DEFAULT_MAX_STEPS = {"wvr": 400, "bvr": 600}
+
+
+def resolve_max_steps(args: argparse.Namespace) -> int:
+    if getattr(args, "max_steps", None):
+        return args.max_steps
+    return DEFAULT_MAX_STEPS[getattr(args, "engagement", "wvr")]
+
+
 def train(args: argparse.Namespace) -> QNetwork:
     random.seed(args.seed)
     np.random.seed(args.seed)
@@ -116,8 +155,9 @@ def train(args: argparse.Namespace) -> QNetwork:
 
     mixed_weights = parse_mixed_weights(getattr(args, "mixed_weights", None))
     bandit_policy = selfplay_policy(args, net, mixed_weights)
-    env = UCAVSimEnv(
-        max_steps=args.max_steps,
+    engagement = getattr(args, "engagement", "wvr")
+    env_kwargs = dict(
+        max_steps=resolve_max_steps(args),
         randomize=not args.fixed_start,
         shaping=args.shaping,
         seed=args.seed,
@@ -126,6 +166,7 @@ def train(args: argparse.Namespace) -> QNetwork:
         bandit_policy=bandit_policy,
         action_set=args.action_set,
     )
+    env = make_env(engagement, **env_kwargs)
     target_net = net.clone()
     buffer: Deque[Transition] = collections.deque(maxlen=args.buffer_size)
 
@@ -203,7 +244,8 @@ def train(args: argparse.Namespace) -> QNetwork:
                                  opponent=args.eval_opponent or args.opponent,
                                  bandit_policy=env.bandit_policy,
                                  mixed_weights=mixed_weights,
-                                 action_set=args.action_set)
+                                 action_set=args.action_set,
+                                 engagement=engagement)
             score = win + 0.5 * conv
             if score > best_score:
                 best_score = score
@@ -231,7 +273,8 @@ def train(args: argparse.Namespace) -> QNetwork:
 
 def evaluate(net: QNetwork, episodes: int = 20, seed: int = 1234,
              opponent: str = "straight", bandit_policy=None,
-             mixed_weights=None, action_set: str = geo.DEFAULT_ACTION_SET):
+             mixed_weights=None, action_set: str = geo.DEFAULT_ACTION_SET,
+             engagement: str = "wvr"):
     """Greedy evaluation.
 
     Returns ``(win_rate, conversion_rate)``.  A "conversion" ends the episode
@@ -248,9 +291,9 @@ def evaluate(net: QNetwork, episodes: int = 20, seed: int = 1234,
     )
     if needs_policy and bandit_policy is None:
         bandit_policy = net.clone()  # mirror match against a frozen copy of itself
-    env = UCAVSimEnv(randomize=True, shaping=0.0, seed=seed, opponent=opponent,
-                     mixed_weights=mixed_weights, bandit_policy=bandit_policy,
-                     action_set=action_set)
+    env = make_env(engagement, randomize=True, shaping=0.0, seed=seed,
+                   opponent=opponent, mixed_weights=mixed_weights,
+                   bandit_policy=bandit_policy, action_set=action_set)
     wins = 0
     conversions = 0
     for _ in range(episodes):
@@ -259,9 +302,16 @@ def evaluate(net: QNetwork, episodes: int = 20, seed: int = 1234,
         info = {}
         while not done:
             obs, _, done, info = env.step(net.act(obs))
-        if info.get("outcome") == "win":
+        outcome = info.get("outcome")
+        if outcome == "win":
             wins += 1
             conversions += 1
+        elif engagement == "bvr":
+            # There is no "conversion" in a BVR fight; the second number is
+            # survival, which is the one a pilot actually cares about when the
+            # kill did not happen.
+            if outcome != "loss":
+                conversions += 1
         else:
             feats = situation(env.pos_r, env.act_r, env.pos_b, env.act_b)
             if feats[0] < 30.0 and feats[1] > 150.0:
@@ -272,7 +322,9 @@ def evaluate(net: QNetwork, episodes: int = 20, seed: int = 1234,
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--episodes", type=int, default=600)
-    p.add_argument("--max-steps", type=int, default=400)
+    p.add_argument("--max-steps", type=int, default=None,
+                   help="episode length (default: 400 for wvr, 600 for bvr, "
+                        "which starts 70 km apart and needs the time)")
     p.add_argument("--lr", type=float, default=0.05)
     p.add_argument("--gamma", type=float, default=0.95)
     p.add_argument("--epsilon-start", type=float, default=1.0)
@@ -300,6 +352,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--selfplay-refresh", type=int, default=0, metavar="EPISODES",
                    help="promote the learner to be its own frozen opponent every N "
                         "episodes (0 = keep the original self-play opponent)")
+    p.add_argument("--engagement", default="wvr", choices=list(ENGAGEMENTS),
+                   help="'wvr' = the gun fight (default); 'bvr' = the missile "
+                        "fight, which starts at 70 km and adds a radar/weapon "
+                        "state block to the observation. Checkpoints are not "
+                        "interchangeable between the two")
     p.add_argument("--action-set", default=geo.DEFAULT_ACTION_SET,
                    choices=sorted(geo.ACTION_SETS),
                    help="'legacy' = the original 9 constant-speed maneuvers; "
@@ -339,13 +396,14 @@ def main() -> None:
         net = QNetwork.load(args.out)  # the best policy is what was saved
         opp = args.eval_opponent or args.opponent
         bandit = QNetwork.load(args.selfplay_init) if args.selfplay_init else None
-        win_rate, conversion_rate = evaluate(
+        win_rate, second = evaluate(
             net, args.eval_episodes, opponent=opp, bandit_policy=bandit,
             mixed_weights=parse_mixed_weights(args.mixed_weights),
-            action_set=args.action_set)
+            action_set=args.action_set, engagement=args.engagement)
+        label = "survival rate" if args.engagement == "bvr" else "conversion rate"
         print(
             f"greedy evaluation over {args.eval_episodes} episodes vs {opp}: "
-            f"win rate {win_rate:.2f}, conversion rate {conversion_rate:.2f}"
+            f"win rate {win_rate:.2f}, {label} {second:.2f}"
         )
 
 

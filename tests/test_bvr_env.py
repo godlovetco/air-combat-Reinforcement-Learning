@@ -360,3 +360,58 @@ class RadarIntegrationTest(unittest.TestCase):
         env._update_tracks()
         self.assertTrue(env._try_launch("agent"))    # ramjet reaches
         self.assertFalse(env._try_launch("bandit"))  # 40 km is far outside IR range
+
+
+class TrainWiringTest(unittest.TestCase):
+    def test_network_dims_per_engagement(self):
+        from dcs_bridge.train import network_dims
+        self.assertEqual(network_dims("legacy", "wvr"), (9, 72))
+        self.assertEqual(network_dims("legacy", "bvr"), (9, 72 + BVR_STATE_DIM))
+        self.assertEqual(network_dims("energy", "bvr"), (27, 216 + BVR_STATE_DIM))
+        with self.assertRaises(ValueError):
+            network_dims("legacy", "within-visual-range")
+
+    def test_make_env_picks_the_right_environment(self):
+        from dcs_bridge.sim_env import UCAVSimEnv
+        from dcs_bridge.train import make_env
+        self.assertIsInstance(make_env("bvr", seed=1), BVRSimEnv)
+        self.assertIsInstance(make_env("wvr", seed=1), UCAVSimEnv)
+
+    def test_build_network_sizes_the_bvr_input(self):
+        from dcs_bridge.train import build_network, build_parser
+        net = build_network(build_parser().parse_args(["--engagement", "bvr"]))
+        self.assertEqual(net.input_dim, observation_dim("legacy"))
+        self.assertEqual(net.num_actions, 9)
+
+    def test_init_from_a_wvr_checkpoint_is_refused(self):
+        from dcs_bridge.train import build_network, build_parser
+        args = build_parser().parse_args(
+            ["--engagement", "bvr", "--init", "checkpoints/ucav_policy.npz"])
+        with self.assertRaises(ValueError) as ctx:
+            build_network(args)
+        self.assertIn("input", str(ctx.exception))
+
+    def test_transfer_init_is_refused_for_bvr(self):
+        from dcs_bridge.train import build_network, build_parser
+        args = build_parser().parse_args(
+            ["--engagement", "bvr", "--action-set", "energy",
+             "--transfer-init", "checkpoints/ucav_policy.npz"])
+        with self.assertRaises(ValueError):
+            build_network(args)
+
+    def test_default_episode_length_follows_the_engagement(self):
+        from dcs_bridge.train import build_parser, resolve_max_steps
+        parse = build_parser().parse_args
+        self.assertEqual(resolve_max_steps(parse([])), 400)
+        self.assertEqual(resolve_max_steps(parse(["--engagement", "bvr"])), 600)
+        self.assertEqual(
+            resolve_max_steps(parse(["--engagement", "bvr", "--max-steps", "900"])),
+            900)
+
+    def test_evaluate_reports_survival_for_bvr(self):
+        from dcs_bridge.train import evaluate
+        net = QNetwork(seed=30, input_dim=observation_dim("legacy"), num_actions=9)
+        win, survival = evaluate(net, episodes=6, seed=31, opponent="ace",
+                                 engagement="bvr")
+        self.assertGreaterEqual(survival, win)   # every win is also a survival
+        self.assertLessEqual(survival, 1.0)
