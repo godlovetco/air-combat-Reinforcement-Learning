@@ -98,13 +98,17 @@ to follow [Semantic Versioning](https://semver.org/).
   forgetting during fine-tuning.
 
 ### Added (continued)
-- **Trained energy policy** (`checkpoints/ucav_policy_energy.npz`), built by
-  `--transfer-init` from the legacy policy and fine-tuned through the rehearsal
-  curriculum with self-play weighted in. Mean of 400 engagements per behavior
-  on three held-out seeds: straight 0.97, pursuit 0.97, evasive 0.98, ace 0.98,
-  mixed 0.98, **self-play 0.29** (against the lifted policy, which scores 0.07).
-  Over the same 1,200 mirror engagements the lifted policy goes 88 W / 316 L
-  and the trained one 345 W / 128 L. Select it with `--checkpoint`.
+- **Trained energy policy** (`checkpoints/ucav_policy_energy.npz`), rebuilt
+  under the corrected climb physics: `--transfer-init` from the legacy policy,
+  then the rehearsal curriculum with self-play weighted in. 400 engagements per
+  behavior on a held-out seed — straight 0.93, pursuit 0.94, evasive 0.94, ace
+  0.96, mixed 0.93, **self-play 0.81 (322 W / 67 L)** against the previous
+  checkpoint's 0.35 (142 W / 236 L). This costs about four points on the
+  scripted axes and is a deliberate exception to this project's
+  no-regressions rule: the previous checkpoint was trained before the
+  zoom-climb exploit was found, so its scores were earned in a world the
+  simulator no longer has. Two further stages were run to buy those points
+  back and both came out worse overall.
 - **Speed-dependent climb authority** (`geometry.max_climb_angle`, energy action
   set only): the maximum climb angle scales from the full 70° at corner speed
   (200 m/s) down to level flight at `V_MIN`. Descending is never limited.

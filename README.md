@@ -385,25 +385,33 @@ worth knowing if you extend the feature vector:
 
 A trained energy policy ships as `checkpoints/ucav_policy_energy.npz`
 (`--checkpoint checkpoints/ucav_policy_energy.npz`). It was built by lifting
-the legacy policy with `--transfer-init`, then fine-tuning through the same
-rehearsal curriculum with self-play weighted in. Mean of 400 engagements per
-behavior on each of three held-out seeds, self-play scored against the lifted
-policy before self-play training:
+the legacy policy with `--transfer-init` and fine-tuning through the rehearsal
+curriculum with self-play weighted in, **under the corrected climb physics**.
+400 engagements per behavior on a held-out seed; the self-play row is scored
+against the previous energy checkpoint:
 
-| Bandit behavior | lifted, no self-play | **`ucav_policy_energy.npz`** |
+| Bandit behavior | previous checkpoint | **shipped now** |
 |---|---|---|
-| straight | 0.97 | **0.97** |
-| pursuit | 0.98 | **0.97** |
-| evasive | 0.95 | **0.98** |
-| ace | 0.99 | **0.98** |
-| mixed | 0.98 | **0.98** |
-| **self-play** | 0.07 | **0.29** |
+| straight | 0.98 | 0.93 |
+| pursuit | 0.92 | **0.94** |
+| evasive | 0.98 | 0.94 |
+| ace | 0.99 | 0.96 |
+| mixed | 0.98 | 0.93 |
+| **self-play** | 0.35 (142 W / 236 L) | **0.81 (322 W / 67 L)** |
 
-The win rate understates what changed. Counting outcomes over the same 1,200
-mirror engagements, the lifted policy goes **88 W / 316 L** against the frozen
-champion — it is losing better than 3:1 — while the self-play-trained one goes
-**345 W / 128 L**. The scripted axes are flat within ±0.01 (noise at this
-sample size); the whole gain is against a capable opponent.
+This one is a deliberate exception to the no-regressions rule this project
+otherwise holds to, and the reason is specific rather than a lowered bar: the
+previous checkpoint was trained before the zoom-climb exploit was found, on a
+model where an aircraft could hold 70° of climb on the speed floor forever. Its
+scripted scores are real, but they were earned in a world the simulator no
+longer has. The replacement costs about four points against scripted bandits
+and turns the fight against an equal from losing better than 3:2 into winning
+nearly 5:1.
+
+Two further curriculum stages were run to try to buy those four points back —
+tripling the straight rehearsal, then re-weighting toward the scripted
+behaviors — and both came out worse overall (0.89 / 0.85 on straight and
+pursuit). The trade appears to be real rather than a tuning miss.
 
 **A hypothesis, falsified, and what it turned up.** The energy action set was
 added on the theory that a mirror match cannot resolve without an energy game.
