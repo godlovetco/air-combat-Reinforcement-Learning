@@ -37,6 +37,15 @@ from . import geometry as geo
 # --------------------------------------------------------------------- #
 RADAR_GIMBAL_DEG = 60.0      # antenna scan limit either side of the nose
 RADAR_RANGE = 90_000.0       # m, detection range against a fighter-size target
+AESA_RANGE = 135_000.0       # m, the same target seen by an AESA
+AESA_NOTCH_CLOSURE = 30.0    # m/s; waveform agility narrows the blind zone
+# A conventional radar is picked up by a warning receiver well beyond its own
+# detection range -- the receiver only has to hear one-way, while the radar
+# needs a return trip.  "You are spiked before you are seen" is the normal
+# state of affairs.  An LPI array inverts that: it can be holding a track from
+# outside the range at which its emissions register at all.
+MSA_RWR_FACTOR = 2.0         # of max range at which a conventional set is heard
+AESA_LPI_FRACTION = 0.5      # of max range at which an LPI array is heard
 NOTCH_CLOSURE = 50.0         # m/s of *target* radial velocity below which the
                              # Doppler filter rejects the return as ground
                              # clutter -- this is what "notching" exploits
@@ -99,9 +108,70 @@ def off_boresight(
 
 @dataclass(frozen=True)
 class Radar:
+    """A fighter radar, or a missile seeker.
+
+    Two array types are modeled, and the differences are the ones that change
+    how a BVR fight is flown rather than a spec sheet:
+
+    * **Detection range.** An AESA's power management buys roughly half again
+      the range of a mechanically-scanned antenna.
+    * **Notch width.** A mechanical set filters on one PRF at a time and has a
+      wide Doppler blind zone; an AESA hops waveforms and narrows it. Beaming
+      still works against both -- it just takes more precision against an AESA.
+    * **Re-acquisition.** A mechanical antenna has to physically slew back and
+      re-scan after it loses a track; an AESA repositions the beam
+      electronically and is back almost immediately. This is why notching a
+      mechanical radar buys so much more time.
+    * **Simultaneous tracks.** How many missiles the radar can support at once.
+    * **LPI.** An AESA can spread its emissions enough that the target's RWR
+      does not register the lock until much closer -- you can be shot at
+      without knowing it, which the observation block reflects.
+    """
+
     gimbal_deg: float = RADAR_GIMBAL_DEG
     max_range: float = RADAR_RANGE
     notch_closure: float = NOTCH_CLOSURE
+    kind: str = "mechanical"
+    simultaneous_tracks: int = 1
+    reacquire_time: float = 3.0        # s of scan needed to regain a lost track
+    lpi_fraction: float = MSA_RWR_FACTOR  # of max_range at which the RWR hears us
+
+    # ---------------------------------------------------------------- #
+    @classmethod
+    def mechanical(cls, **kw) -> "Radar":
+        """Mechanically-scanned array: shorter reach, wide notch, slow to recover."""
+        return cls(**kw)
+
+    @classmethod
+    def aesa(cls, **kw) -> "Radar":
+        """Active electronically scanned array."""
+        params = dict(
+            gimbal_deg=RADAR_GIMBAL_DEG,
+            max_range=AESA_RANGE,
+            notch_closure=AESA_NOTCH_CLOSURE,
+            kind="aesa",
+            simultaneous_tracks=4,
+            reacquire_time=0.5,
+            lpi_fraction=AESA_LPI_FRACTION,
+        )
+        params.update(kw)
+        return cls(**params)
+
+    def warns_at(self) -> float:
+        """Range inside which this radar's emissions trip the target's RWR.
+
+        For a conventional set this is *larger* than its own detection range;
+        for an LPI array it is smaller.  That inversion is the whole tactical
+        argument for the technology.
+        """
+        return self.max_range * self.lpi_fraction
+
+    def is_detected_by_rwr(
+        self, pos_own: Sequence[float], pos_tgt: Sequence[float]
+    ) -> bool:
+        """Whether the target's RWR registers a spike from this radar."""
+        _los, d = line_of_sight(pos_own, pos_tgt)
+        return d <= self.warns_at()
 
     def can_see(
         self,
@@ -135,9 +205,19 @@ class Radar:
 # --------------------------------------------------------------------- #
 @dataclass(frozen=True)
 class MissileSpec:
-    """Representative active-radar missile (AIM-120C class)."""
+    """A weapon's kinematics, guidance and seeker.
+
+    ``guidance`` decides how the round behaves in flight:
+
+    * ``"active_radar"`` -- flies on the launcher's radar until its own seeker
+      goes active at ``activation_range``.  Defeatable by breaking the
+      supporting lock before then, and by notching the seeker after.
+    * ``"infrared"`` -- fire-and-forget from the rail; no radar support, and
+      Doppler notching does nothing to it.  It pays for that with range.
+    """
 
     name: str = "ARH"
+    guidance: str = "active_radar"
     rmax: float = 70_000.0          # m, kinematic reach head-on at altitude
     rne: float = 25_000.0           # m, no-escape zone head-on at altitude
     rmin: float = 1_500.0           # m, minimum arming range
@@ -145,9 +225,46 @@ class MissileSpec:
     activation_range: float = 16_000.0   # m to target when the seeker goes active
     max_flight_time: float = 120.0  # s of usable energy
     lethal_radius: float = 120.0    # m
+    seeker_gimbal_deg: float = 45.0
+    seeker_range: float = 20_000.0
+    seeker_notch_closure: float = NOTCH_CLOSURE
+    seeker_memory: float = 8.0      # s the seeker coasts on its last solution
+
+    def seeker(self) -> Radar:
+        return Radar(gimbal_deg=self.seeker_gimbal_deg,
+                     max_range=self.seeker_range,
+                     notch_closure=self.seeker_notch_closure)
+
+    @property
+    def fire_and_forget(self) -> bool:
+        return self.guidance == "infrared"
 
 
-DEFAULT_MISSILE = MissileSpec()
+# Representative weapons.  The point of carrying three is that they impose
+# different fights: the medium ARH is the workhorse, the ramjet's no-escape
+# zone is large enough that "just turn and run" stops working, and the IR
+# missile cannot be notched at all but has to be taken into the merge.
+ARH_MEDIUM = MissileSpec(
+    name="ARH-medium",                 # AIM-120C class
+)
+ARH_LONG = MissileSpec(
+    name="ARH-long",                   # ramjet, Meteor / AIM-120D class
+    rmax=120_000.0, rne=60_000.0, rmin=2_000.0, speed=1_000.0,
+    activation_range=20_000.0, max_flight_time=200.0,
+    seeker_range=25_000.0,
+)
+IR_SHORT = MissileSpec(
+    name="IR-short",                   # AIM-9X class
+    guidance="infrared",
+    rmax=18_000.0, rne=8_000.0, rmin=300.0, speed=800.0,
+    activation_range=float("inf"),     # active off the rail
+    max_flight_time=60.0,
+    seeker_gimbal_deg=90.0, seeker_range=18_000.0,
+    seeker_notch_closure=0.0,          # infrared does not care about Doppler
+)
+
+MISSILES = {m.name: m for m in (ARH_MEDIUM, ARH_LONG, IR_SHORT)}
+DEFAULT_MISSILE = ARH_MEDIUM
 
 
 def altitude_factor(alt_m: float) -> float:
@@ -174,34 +291,74 @@ def kinematic_range(
     return reach * altitude_factor(own_alt) * aspect_factor(target_aspect_deg)
 
 
+@dataclass(frozen=True)
+class WeaponEngagementZone:
+    """The range bands for a shot taken right now.
+
+    ``rmax``  the round can reach the target if it keeps doing what it is doing.
+    ``rtr``   "turn and run": inside this, a target that reverses still dies.
+    ``rne``   no-escape zone -- no maneuver defeats it kinematically.
+    ``rmin``  minimum arming range.
+    """
+
+    range: float
+    rmax: float
+    rtr: float
+    rne: float
+    rmin: float
+    time_of_flight: float
+
+    @property
+    def in_envelope(self) -> bool:
+        return self.rmin <= self.range <= self.rmax
+
+    @property
+    def in_nez(self) -> bool:
+        return self.rmin <= self.range <= self.rne
+
+    @property
+    def defeatable_by_running(self) -> bool:
+        """A shot that reaches now but that the target can still outrun."""
+        return self.in_envelope and self.range > self.rtr
+
+    def as_dict(self) -> dict:
+        return {
+            "range": self.range, "rmax": self.rmax, "rtr": self.rtr,
+            "rne": self.rne, "rmin": self.rmin,
+            "time_of_flight": self.time_of_flight,
+            "in_envelope": self.in_envelope, "in_nez": self.in_nez,
+        }
+
+
+def weapon_engagement_zone(
+    spec: MissileSpec,
+    pos_own: Sequence[float], act_own: Sequence[float],
+    pos_tgt: Sequence[float], act_tgt: Sequence[float],
+) -> WeaponEngagementZone:
+    """WEZ against this target in this geometry."""
+    _los, d = line_of_sight(pos_own, pos_tgt)
+    feats = geo.situation(pos_own, act_own, pos_tgt, act_tgt)
+    # feats[1] is the target's aspect angle: the angle between its velocity and
+    # the line of sight back to us.  0 = coming straight at us (longest reach),
+    # 180 = running straight away (shortest).
+    target_aspect = feats[1]
+    rmax = kinematic_range(spec, pos_own[2], target_aspect)
+    rne = kinematic_range(spec, pos_own[2], target_aspect, base=spec.rne)
+    # Rtr is what the shot is worth if the target reverses the moment it
+    # launches: recompute the reach against a target running directly away.
+    rtr = kinematic_range(spec, pos_own[2], 180.0)
+    closing = max(1.0, spec.speed + closure_rate(pos_own, act_own, pos_tgt, act_tgt))
+    return WeaponEngagementZone(range=d, rmax=rmax, rtr=rtr, rne=rne,
+                                rmin=spec.rmin, time_of_flight=d / closing)
+
+
 def launch_authority(
     spec: MissileSpec,
     pos_own: Sequence[float], act_own: Sequence[float],
     pos_tgt: Sequence[float], act_tgt: Sequence[float],
 ) -> dict:
-    """Range bands for a shot right now.
-
-    Returns ``{"range", "rmax", "rne", "rmin", "in_envelope", "in_nez"}``.
-    ``in_envelope`` means the shot can reach; ``in_nez`` means the target
-    cannot outrun it by turning and running.
-    """
-    _los, d = line_of_sight(pos_own, pos_tgt)
-    feats = geo.situation(pos_own, act_own, pos_tgt, act_tgt)
-    # feats[1] is the target's aspect angle: the angle between its velocity and
-    # the line of sight back to us.  0 = coming straight at us (longest reach),
-    # 180 = running straight away (shortest).  That is exactly what
-    # aspect_factor wants, so it goes in unchanged.
-    target_aspect = feats[1]
-    rmax = kinematic_range(spec, pos_own[2], target_aspect)
-    rne = kinematic_range(spec, pos_own[2], target_aspect, base=spec.rne)
-    return {
-        "range": d,
-        "rmax": rmax,
-        "rne": rne,
-        "rmin": spec.rmin,
-        "in_envelope": spec.rmin <= d <= rmax,
-        "in_nez": spec.rmin <= d <= rne,
-    }
+    """``weapon_engagement_zone`` as a plain dict, for callers that want one."""
+    return weapon_engagement_zone(spec, pos_own, act_own, pos_tgt, act_tgt).as_dict()
 
 
 # --------------------------------------------------------------------- #
@@ -225,15 +382,20 @@ class Missile:
     active: bool = False              # seeker has gone "pitbull"
     alive: bool = True
     outcome: Optional[str] = None     # "hit", "no_lock", "notched", "out_of_energy"
-    _seeker: Radar = field(default_factory=lambda: Radar(gimbal_deg=45.0,
-                                                         max_range=20_000.0))
+    memory_left: Optional[float] = None   # s of inertial coast still available
+    _seeker: Optional[Radar] = None
     _heading: Tuple[float, float, float] = (0.0, 1.0, 0.0)
+
+    def __post_init__(self):
+        if self._seeker is None:
+            self._seeker = self.spec.seeker()
 
     @classmethod
     def launch(cls, spec: MissileSpec, shooter: str,
                pos: Sequence[float], act: Sequence[float]) -> "Missile":
         vx, vy, vz = geo.velocity_enu(1.0, act[1], act[2])
         return cls(spec=spec, shooter=shooter, pos=list(pos), speed=spec.speed,
+                   active=spec.fire_and_forget,   # IR guides off the rail
                    _heading=(vx, vy, vz))
 
     # ---------------------------------------------------------------- #
@@ -258,26 +420,43 @@ class Missile:
         if not self.active and d <= self.spec.activation_range:
             self.active = True  # pitbull -- the launcher is free to maneuver
 
+        guiding = True
         if self.active:
-            act = [self.speed, 0.0, 0.0]
             guiding = self._seeker.can_see(self.pos, self._nose_act(), target_pos,
                                            target_act)
-            if not guiding:
-                return self._end("notched")
+            if guiding:
+                self.memory_left = None       # solution is good again
+            else:
+                # Notched, but not dead.  The seeker coasts on its last
+                # solution: a target has to *hold* the beam long enough for the
+                # missile to fly past or run out of energy.  Come out of the
+                # notch early and it reacquires.  Killing the round the instant
+                # it lost the return made a single perfect beam turn defeat
+                # every shot, which turned every engagement into a merge.
+                if self.memory_left is None:
+                    self.memory_left = self.spec.seeker_memory
+                self.memory_left -= dt
+                if self.memory_left <= 0.0:
+                    return self._end("notched")
         elif not supported:
             return self._end("no_lock")
 
         if self.flight_time > self.spec.max_flight_time:
             return self._end("out_of_energy")
 
-        # Pure pursuit onto the target: enough to make range, notch and F-pole
-        # behave correctly without pretending to model proportional navigation.
+        # Pure pursuit onto the target while the solution is good; straight
+        # ahead on the last known heading while coasting.  Enough to make
+        # range, notch and F-pole behave correctly without pretending to model
+        # proportional navigation.
         step_len = self.speed * dt
-        if d <= max(step_len, self.spec.lethal_radius):
-            self.pos = list(target_pos)
+        if guiding:
+            if d <= max(step_len, self.spec.lethal_radius):
+                self.pos = list(target_pos)
+                return self._end("hit")
+            self._heading = los
+        elif d <= self.spec.lethal_radius:
             return self._end("hit")
-        self._heading = los
-        self.pos = [self.pos[i] + los[i] * step_len for i in range(3)]
+        self.pos = [self.pos[i] + self._heading[i] * step_len for i in range(3)]
         return None
 
     # ---------------------------------------------------------------- #
@@ -293,6 +472,23 @@ class Missile:
         self.alive = False
         self.outcome = outcome
         return outcome
+
+    def is_tracking(
+        self, target_pos: Sequence[float], target_act: Sequence[float]
+    ) -> bool:
+        """Whether an active round's own seeker currently holds the target.
+
+        False for a round still on datalink -- it is not tracking anything
+        itself yet -- and false for one whose target has beamed into the notch.
+        """
+        if not (self.alive and self.active):
+            return False
+        return self._seeker.can_see(self.pos, self._nose_act(), target_pos, target_act)
+
+    @property
+    def coasting(self) -> bool:
+        """Active, but flying on memory rather than on a live return."""
+        return self.alive and self.active and self.memory_left is not None
 
     def time_to_active(self, target_pos: Sequence[float]) -> float:
         """Seconds of radar support still owed before the seeker takes over.
