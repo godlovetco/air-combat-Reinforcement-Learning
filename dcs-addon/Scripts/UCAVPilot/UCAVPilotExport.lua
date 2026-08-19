@@ -12,9 +12,10 @@
 --
 -- Protocol (matches dcs_bridge/link.py):
 --   out, UDP 127.0.0.1:7778  one JSON object per frame (fixed schema below)
---   in,  UDP 0.0.0.0:7779    "pitch,roll,rudder,thrust,trigger\n"
+--   in,  UDP 0.0.0.0:7779    "pitch,roll,rudder,thrust,trigger,weapon\n"
 --                            pitch/roll/rudder in [-1,1], thrust in [0,1],
---                            trigger 0/1
+--                            trigger 0/1 (gun, held), weapon 0/1 (missile,
+--                            edge-triggered)
 ------------------------------------------------------------------------------
 
 local UCAV = {}
@@ -32,12 +33,18 @@ UCAV.COMMAND_TIMEOUT = 1.0          -- s without commands -> release controls
 -- DCS joystick axis command ids (Export API).
 local AXIS_PITCH, AXIS_ROLL, AXIS_RUDDER, AXIS_THRUST = 2001, 2002, 2003, 2004
 local CMD_FIRE_ON, CMD_FIRE_OFF = 84, 85
+-- Weapon release (missile pickle), separate from the gun trigger above.  A few
+-- modules bind this differently; if missiles never come off the rails, this is
+-- the number to change, which is why it lives in the config table.
+UCAV.CMD_WEAPON_RELEASE = UCAV.CMD_WEAPON_RELEASE or 68
+local CMD_WEAPON_RELEASE = UCAV.CMD_WEAPON_RELEASE
 
 -- ------------------------------ state ---------------------------------------
 local sendSock, recvSock
 local lastCmdTime = -1
 local lastFrameTime = -1
 local firing = false
+local weaponHeld = false
 local logFile
 
 -- Keep whatever other exports (Tacview, SRS, DCS-BIOS...) were loaded first.
@@ -130,6 +137,75 @@ local function findFriendlyLead(selfData)
     return best
 end
 
+-- ---------------------------------------------------------------------------
+-- BVR sensor picture.
+--
+-- Every export below is optional and every call is wrapped: some airframe
+-- modules implement no radar page, and an older DCS build may not have the
+-- function at all.  A missing sensor block makes the Python side fall back to
+-- the gun fight rather than fail, which is what should happen when this is
+-- flown in a module nobody has tested it against.
+-- ---------------------------------------------------------------------------
+local function tryCall(fn, ...)
+    if type(fn) ~= "function" then return nil end
+    local ok, result = pcall(fn, ...)
+    if ok then return result end
+    return nil
+end
+
+-- Air-to-air rounds left on the stations.  DCS reports the payload as a
+-- station list; level1 == 4 is a missile in its weapon taxonomy, so bombs,
+-- pods and tanks on the same rails are not counted.
+local function countMissiles()
+    local payload = tryCall(LoGetPayloadInfo)
+    if not payload or not payload.Stations then return nil end
+    local total = 0
+    for _, station in pairs(payload.Stations) do
+        local count = station.count or 0
+        local level1 = station.weapon and station.weapon.level1 or nil
+        if count > 0 and level1 == 4 then
+            total = total + count
+        end
+    end
+    return total
+end
+
+local function lockJson()
+    local info = tryCall(LoGetLockedTargetInformation)
+    local target = info and info.Target or nil
+    if not target then return '"locked":false' end
+    return string.format(
+        '"locked":true,"lock_range":%.1f,"lock_az":%.3f,"lock_el":%.3f',
+        num(target.Distance or 0), deg(target.Azimuth), deg(target.Elevation))
+end
+
+local function threatsJson()
+    local tws = tryCall(LoGetTWSInfo)
+    local emitters = tws and tws.Emitters or nil
+    if not emitters then return nil end
+    local parts = {}
+    for _, e in pairs(emitters) do
+        parts[#parts + 1] = string.format(
+            '{"az":%.3f,"power":%.3f,"launch":%s,"lock":%s}',
+            deg(e.Azimuth), num(e.Power or 0),
+            e.Missile and "true" or "false",
+            (e.Type and e.Type.Mode and e.Type.Mode > 0) and "true" or "false")
+    end
+    if #parts == 0 then return nil end
+    return '"threats":[' .. table.concat(parts, ",") .. ']'
+end
+
+local function sensorsJson()
+    local fields = { lockJson() }
+    local missiles = countMissiles()
+    if missiles then
+        fields[#fields + 1] = string.format('"missiles":%d', missiles)
+    end
+    local threats = threatsJson()
+    if threats then fields[#fields + 1] = threats end
+    return ',"sensors":{' .. table.concat(fields, ",") .. '}'
+end
+
 local function sendTelemetry()
     local selfData = LoGetSelfData()
     if not selfData then return end
@@ -161,8 +237,8 @@ local function sendTelemetry()
     end
 
     local packet = string.format(
-        '{"t":%.3f,"own":%s%s%s}',
-        num(LoGetModelTime() or 0), ownJson, banditJson, leadJson)
+        '{"t":%.3f,"own":%s%s%s%s}',
+        num(LoGetModelTime() or 0), ownJson, banditJson, leadJson, sensorsJson())
     sendSock:sendto(packet, UCAV.HOST, UCAV.TELEMETRY_PORT)
 end
 
@@ -178,8 +254,9 @@ local function applyCommands()
 
     local t = LoGetModelTime() or 0
     if packet then
-        local pitch, roll, rudder, thrust, trigger = string.match(
-            packet, "^(%-?[%d%.]+),(%-?[%d%.]+),(%-?[%d%.]+),(%-?[%d%.]+),(%d)")
+        local pitch, roll, rudder, thrust, trigger, weapon = string.match(
+            packet,
+            "^(%-?[%d%.]+),(%-?[%d%.]+),(%-?[%d%.]+),(%-?[%d%.]+),(%d),?(%d?)")
         if pitch then
             lastCmdTime = t
             local thr = tonumber(thrust) or 0
@@ -190,6 +267,18 @@ local function applyCommands()
             LoSetCommand(AXIS_ROLL,   tonumber(roll)   or 0)
             LoSetCommand(AXIS_RUDDER, tonumber(rudder) or 0)
             LoSetCommand(AXIS_THRUST, thr * 2 - 1)
+
+            -- Missile release is edge-triggered: one command sends one round,
+            -- so a Python side that keeps the bit asserted does not empty the
+            -- rails.  The gun below is the opposite -- held down while set.
+            local wantWeapon = UCAV.WEAPONS_ENABLED and weapon == "1"
+            if wantWeapon and not weaponHeld then
+                LoSetCommand(CMD_WEAPON_RELEASE)
+                weaponHeld = true
+                log("weapon release")
+            elseif not wantWeapon then
+                weaponHeld = false
+            end
 
             local wantFire = UCAV.WEAPONS_ENABLED and trigger == "1"
             if wantFire and not firing then

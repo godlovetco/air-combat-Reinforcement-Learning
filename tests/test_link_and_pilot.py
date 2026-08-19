@@ -62,7 +62,7 @@ class ProtocolTest(unittest.TestCase):
         ).decode()
         # Same pattern the Lua side uses to parse commands.
         self.assertRegex(
-            line, r"^-?[\d.]+,-?[\d.]+,-?[\d.]+,-?[\d.]+,[01]\n$"
+            line, r"^-?[\d.]+,-?[\d.]+,-?[\d.]+,-?[\d.]+,[01],[01]\n$"
         )
         parts = line.strip().split(",")
         self.assertAlmostEqual(float(parts[0]), -0.25)

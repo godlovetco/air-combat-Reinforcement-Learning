@@ -58,7 +58,8 @@ class Controls:
     roll: float = 0.0
     rudder: float = 0.0
     thrust: float = 0.5   # 0..1
-    trigger: int = 0
+    trigger: int = 0      # gun: held down while 1
+    weapon: int = 0       # missile release: edge-triggered, one command = one round
 
 
 def _clamp(x: float, lo: float, hi: float) -> float:

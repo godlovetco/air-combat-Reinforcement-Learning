@@ -21,6 +21,11 @@ radio = ["anthropic>=0.40"]
 voice = ["SpeechRecognition>=3.10", "pyttsx3>=2.90"]
 # Post-flight validation plots.
 plots = ["matplotlib>=3.5"]
+# Development: a Lua interpreter, so the DCS export script can be run against
+# a stubbed DCS API in the test suite.  Not needed at runtime -- DCS brings its
+# own Lua -- but without it the highest-risk interface in the product is
+# covered by nothing.
+dev = ["lupa>=2.0"]
 # Everything, for a full local install.
 all = ["anthropic>=0.40", "SpeechRecognition>=3.10", "pyttsx3>=2.90", "matplotlib>=3.5"]
 
