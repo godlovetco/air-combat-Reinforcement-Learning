@@ -523,24 +523,37 @@ array. The edge that does appear grows with start range, which is where the
 extra detection range can be spent. Reported as measured rather than tuned
 until it looked better.
 
-**Scripted beats learned, so far.** A twenty-line hand-flown timeline — notch
-the missile, crank while supporting your own shot, otherwise commit — is still
-ahead of the trained policies:
+**Scripted still beats learned.** A twenty-line hand-flown timeline — notch the
+missile, crank while supporting your own shot, otherwise commit — is ahead of
+every trained policy so far. Win rate / survival rate over 150 engagements per
+cell on a held-out seed:
 
 | agent | straight | pursuit | evasive | ace |
 |---|---|---|---|---|
-| random policy | 0.00 | 0.00 | 0.00 | 0.00 |
-| **hand-flown timeline** | **0.94** | **0.99** | 0.07 | 0.00 |
-| trained on mixed | 0.07 | 0.13 | 0.02 | 0.04 |
-| trained on `ace` only | 0.22 | 0.35 | 0.03 | 0.03 |
+| uniform random actions | 0.09/0.87 | 0.21/0.93 | 0.00/0.83 | 0.00/0.94 |
+| always hot (fly at the bandit) | 0.31/0.31 | 0.54/0.54 | 0.00/0.07 | 0.00/0.99 |
+| **hand-flown timeline** | **0.94**/1.00 | **0.99**/1.00 | 0.07/0.99 | 0.00/1.00 |
+| RL, trained on mixed | 0.19/0.41 | 0.24/0.36 | 0.06/0.25 | 0.05/0.99 |
+| RL, trained on `ace` | 0.34/0.65 | 0.58/0.68 | 0.03/0.44 | 0.00/1.00 |
 
-Win rate over 150 engagements per cell on a held-out seed. The first diagnosis
-was an observation bug — the block announced that a missile was inbound and how
-long it had, and never said *where* it was, so the policy had no way to learn a
-maneuver defined relative to the threat. Bearing and notch depth are in the
-block now. Whether that closes the gap is a measurement, and until it is
-re-run, the honest summary is that the scripted baseline is the thing to beat
-and has not been beaten.
+The two floors are worth as much as the ceiling. Uniform random actions almost
+never score but survive 83–94% of the time — a target that maneuvers
+unpredictably is hard to lock — so survival alone is a cheap number and should
+never be read on its own. Flying straight at the bandit converts 0.31 and 0.54
+but survives 0.31 and 0.07: pressing without defending is how you die. A useful
+policy has to beat *both*, and only one of the trained ones beats "always hot"
+at all.
+
+The first diagnosis was an observation bug: the block announced that a missile
+was inbound and how long it had, and never said *where* it was, so a maneuver
+defined relative to the threat was unlearnable. Adding bearing and notch depth
+moved the straight column 0.07 → 0.19 and 0.22 → 0.34 — real, and not enough.
+
+The second is a selection bug, still being measured: checkpoints were being
+chosen by greedy evaluation against `ace`, where *nothing* scores — the scripted
+timeline included — so the selection signal was almost entirely survival, which
+rewards hiding. That would explain policies that survive against `ace` and
+forget how to kill a straight-flier.
 
 Note also that the `evasive` and `ace` columns are near zero *for every agent
 including the scripted one*: two pilots who both notch correctly tend to end
