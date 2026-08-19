@@ -61,6 +61,20 @@ to follow [Semantic Versioning](https://semver.org/).
   one behavior hard while rehearsing the others, preventing catastrophic
   forgetting during fine-tuning.
 
+### Added (continued)
+- **Trained energy policy** (`checkpoints/ucav_policy_energy.npz`), built by
+  `--transfer-init` from the legacy policy and fine-tuned through the rehearsal
+  curriculum with self-play weighted in. Mean of 400 engagements per behavior
+  on three held-out seeds: straight 0.97, pursuit 0.97, evasive 0.98, ace 0.98,
+  mixed 0.98, **self-play 0.29** (against the lifted policy, which scores 0.07).
+  Over the same 1,200 mirror engagements the lifted policy goes 88 W / 316 L
+  and the trained one 345 W / 128 L. Select it with `--checkpoint`.
+- Recorded a partly-wrong hypothesis: the energy action set was added on the
+  theory that a mirror match cannot resolve without an energy game. Mirror
+  fights ending `out_of_bounds` went 92% (legacy) → 67% (energy) → 60% (energy
+  + self-play training) and stopped there, so throttle was a real but partial
+  cause. The remaining one is likely the 200 km arena and 400-step cap.
+
 ### Fixed
 - **`delta_v2` was effectively unnormalized** — the legacy scaling divides it by
   1.0 while every other feature gets a real scale. Harmless in the legacy action

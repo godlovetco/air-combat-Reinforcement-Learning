@@ -296,3 +296,22 @@ class TransferTest(unittest.TestCase):
         ):
             with self.assertRaises(ValueError):
                 build_network(parse(argv))
+
+
+class ShippedEnergyCheckpointTest(unittest.TestCase):
+    def test_it_loads_as_an_energy_network(self):
+        net = QNetwork.load("checkpoints/ucav_policy_energy.npz")
+        self.assertEqual((net.input_dim, net.num_actions), (216, 27))
+        self.assertEqual(net.action_set, "energy")
+
+    def test_it_drives_an_episode_to_a_conclusion(self):
+        net = QNetwork.load("checkpoints/ucav_policy_energy.npz")
+        env = UCAVSimEnv(randomize=True, shaping=0.0, seed=4242,
+                         opponent="mixed", action_set="energy")
+        obs = env.reset()
+        done, steps, info = False, 0, {}
+        while not done and steps < env.max_steps + 1:
+            obs, _r, done, info = env.step(net.act(obs))
+            steps += 1
+        self.assertTrue(done)
+        self.assertIn(info["outcome"], ("win", "loss", "out_of_bounds", "timeout"))

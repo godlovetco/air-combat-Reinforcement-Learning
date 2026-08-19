@@ -383,6 +383,42 @@ worth knowing if you extend the feature vector:
   The result agrees with the legacy policy's maneuver choice ~97% of the time
   and starts the fine-tune with only the throttle axis to learn.
 
+A trained energy policy ships as `checkpoints/ucav_policy_energy.npz`
+(`--checkpoint checkpoints/ucav_policy_energy.npz`). It was built by lifting
+the legacy policy with `--transfer-init`, then fine-tuning through the same
+rehearsal curriculum with self-play weighted in. Mean of 400 engagements per
+behavior on each of three held-out seeds, self-play scored against the lifted
+policy before self-play training:
+
+| Bandit behavior | lifted, no self-play | **`ucav_policy_energy.npz`** |
+|---|---|---|
+| straight | 0.97 | **0.97** |
+| pursuit | 0.98 | **0.97** |
+| evasive | 0.95 | **0.98** |
+| ace | 0.99 | **0.98** |
+| mixed | 0.98 | **0.98** |
+| **self-play** | 0.07 | **0.29** |
+
+The win rate understates what changed. Counting outcomes over the same 1,200
+mirror engagements, the lifted policy goes **88 W / 316 L** against the frozen
+champion — it is losing better than 3:1 — while the self-play-trained one goes
+**345 W / 128 L**. The scripted axes are flat within ±0.01 (noise at this
+sample size); the whole gain is against a capable opponent.
+
+**A hypothesis that only half held.** The energy action set was added on the
+theory that a mirror match cannot resolve without an energy game. Mirror
+engagements ending `out_of_bounds` instead of a kill:
+
+| | legacy action set | energy, lifted | energy, self-play trained |
+|---|---|---|---|
+| unresolved | 92% | 67% | **60%** |
+
+Better by a lot, but still a majority. Adding throttle and then training
+against an equal moved unresolved fights from 92% to 60% and no further, so
+the remaining cause is somewhere else — most likely the 200 km arena and
+400-step episode cap, which a pair of well-matched fighters can simply fly out
+of. That is the next thing to look at, not more action-space work.
+
 Note on the numbers below: `ace` was added as an attempt at a harder
 benchmark and did not turn out to be harder — the policy handled it at 0.99
 without ever having trained on it. Self-play is the benchmark that finally
