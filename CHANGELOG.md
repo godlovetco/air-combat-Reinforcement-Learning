@@ -69,13 +69,28 @@ to follow [Semantic Versioning](https://semver.org/).
   mixed 0.98, **self-play 0.29** (against the lifted policy, which scores 0.07).
   Over the same 1,200 mirror engagements the lifted policy goes 88 W / 316 L
   and the trained one 345 W / 128 L. Select it with `--checkpoint`.
-- Recorded a partly-wrong hypothesis: the energy action set was added on the
-  theory that a mirror match cannot resolve without an energy game. Mirror
-  fights ending `out_of_bounds` went 92% (legacy) → 67% (energy) → 60% (energy
-  + self-play training) and stopped there, so throttle was a real but partial
-  cause. The remaining one is likely the 200 km arena and 400-step cap.
+- **Speed-dependent climb authority** (`geometry.max_climb_angle`, energy action
+  set only): the maximum climb angle scales from the full 70° at corner speed
+  (200 m/s) down to level flight at `V_MIN`. Descending is never limited.
 
 ### Fixed
+- **A hard speed floor made a vertical zoom climb free**, and it dominated
+  self-play. Every unresolved mirror engagement — 60% of them — ended at the
+  11 km ceiling, never at the horizontal boundary or the ground, with the
+  bandit departing five times more often than the agent. Widening the arena to
+  2,000 km and quadrupling the episode cap changed the outcome distribution by
+  zero episodes, which ruled out the arena explanation this file previously
+  offered. Climb authority is now bounded by the energy on hand. Running the
+  shipped energy policy unchanged under the corrected physics moves boundary
+  departures from 60% to ~1% and resolved fights from 40% to 60%; the rest are
+  genuine stalemates.
+- **The agent was penalized for the bandit's departure.** `out_of_bounds` cost
+  −5 whenever *either* aircraft left the arena, so in a self-play fight the
+  agent absorbed the penalty for something it does not control five times out
+  of six. Departures are now attributed: `out_of_bounds` (−5) for the agent,
+  the new `bandit_departed` (0.0) when only the bandit leaves. Applies to both
+  action sets. Evaluation metrics are unaffected — neither outcome counts as a
+  win or a conversion — so the published tables stand.
 - **`delta_v2` was effectively unnormalized** — the legacy scaling divides it by
   1.0 while every other feature gets a real scale. Harmless in the legacy action
   set, where both aircraft are pinned at their start speed and the feature is

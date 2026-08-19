@@ -81,6 +81,23 @@ V_MAX = 400.0           # m/s
 THROTTLE_ACCEL = 4.0    # m/s^2 commanded by full burner / idle
 G_ACCEL = 9.81          # m/s^2
 TURN_BLEED = 3.0        # m/s^2 of induced drag at the full 10 deg/step turn
+V_CORNER = 200.0        # m/s, above which the full climb angle is available
+
+
+def max_climb_angle(v: float) -> float:
+    """Climb angle the jet can hold at speed ``v`` (energy action set only).
+
+    Without this a point mass with a hard speed floor can zoom-climb forever:
+    it trades speed for altitude, bottoms out at ``V_MIN``, and keeps going up
+    at ``V_MIN`` indefinitely.  Measured consequence in a self-play fight: every
+    single unresolved engagement ended at the 11 km ceiling, the bandit five
+    times more often than the agent.  Real jets run out of energy and the nose
+    falls, so climb authority scales from the full limit at corner speed down to
+    level flight at ``V_MIN``.  Descending is never limited -- unloading is how
+    you get the energy back.
+    """
+    frac = (v - V_MIN) / (V_CORNER - V_MIN)
+    return GAMMA_LIMIT_DEG * max(0.0, min(1.0, frac))
 
 
 def action_set_dims(action_set: str = DEFAULT_ACTION_SET) -> Tuple[int, int]:
@@ -170,9 +187,11 @@ def candidate_actions(
             f"unknown action set {action_set!r}, expected {tuple(ACTION_SETS)}"
         )
     out = []
+    # Climb authority is bounded by the energy on hand; diving never is.
+    up_limit = GAMMA_LIMIT_DEG if action_set == "legacy" else max_climb_angle(v)
     for delta in ACTION_SETS[action_set]:
         d_gamma, d_psi = delta[0], delta[1]
-        new_gamma = max(-GAMMA_LIMIT_DEG, min(GAMMA_LIMIT_DEG, gamma_deg + d_gamma))
+        new_gamma = max(-GAMMA_LIMIT_DEG, min(up_limit, gamma_deg + d_gamma))
         new_v = v if len(delta) == 2 else energy_step(v, new_gamma, d_psi, delta[2], dt)
         out.append([new_v, new_gamma, wrap_heading(psi_deg + d_psi)])
     return out

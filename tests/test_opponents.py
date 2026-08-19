@@ -2,7 +2,7 @@ import math
 import unittest
 
 from dcs_bridge import geometry as geo
-from dcs_bridge.sim_env import UCAVSimEnv
+from dcs_bridge.sim_env import OUTCOMES, UCAVSimEnv
 
 
 def _bearing(src, dst):
@@ -199,7 +199,7 @@ class OpponentTest(unittest.TestCase):
             obs, _r, done, info = env.step(net.act(obs))
             steps += 1
         self.assertTrue(done)
-        self.assertIn(info["outcome"], ("win", "loss", "out_of_bounds", "timeout"))
+        self.assertIn(info["outcome"], OUTCOMES)
 
     def test_evaluate_selfplay_defaults_to_a_mirror_match(self):
         from dcs_bridge.policy import QNetwork
@@ -244,7 +244,7 @@ class OpponentTest(unittest.TestCase):
             obs, _r, done, info = env.step(4)
             steps += 1
         self.assertTrue(done)
-        self.assertIn(info["outcome"], ("win", "loss", "out_of_bounds", "timeout"))
+        self.assertIn(info["outcome"], OUTCOMES)
 
 
 if __name__ == "__main__":

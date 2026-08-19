@@ -6,7 +6,7 @@ import numpy as np
 
 from dcs_bridge import geometry as geo
 from dcs_bridge.policy import QNetwork
-from dcs_bridge.sim_env import UCAVSimEnv
+from dcs_bridge.sim_env import OUTCOMES, UCAVSimEnv
 
 
 class ActionSetTest(unittest.TestCase):
@@ -170,7 +170,7 @@ class EnergyEnvTest(unittest.TestCase):
             obs, _r, done, info = env.step(net.act(obs))
             steps += 1
         self.assertTrue(done)
-        self.assertIn(info["outcome"], ("win", "loss", "out_of_bounds", "timeout"))
+        self.assertIn(info["outcome"], OUTCOMES)
 
 
 class TrainWiringTest(unittest.TestCase):
@@ -314,4 +314,111 @@ class ShippedEnergyCheckpointTest(unittest.TestCase):
             obs, _r, done, info = env.step(net.act(obs))
             steps += 1
         self.assertTrue(done)
-        self.assertIn(info["outcome"], ("win", "loss", "out_of_bounds", "timeout"))
+        self.assertIn(info["outcome"], OUTCOMES)
+
+
+class ClimbAuthorityTest(unittest.TestCase):
+    def test_authority_scales_from_the_floor_to_corner_speed(self):
+        self.assertEqual(geo.max_climb_angle(geo.V_MIN), 0.0)
+        self.assertEqual(geo.max_climb_angle(geo.V_CORNER), geo.GAMMA_LIMIT_DEG)
+        self.assertEqual(geo.max_climb_angle(geo.V_MAX), geo.GAMMA_LIMIT_DEG)
+        mid = geo.max_climb_angle((geo.V_MIN + geo.V_CORNER) / 2.0)
+        self.assertAlmostEqual(mid, geo.GAMMA_LIMIT_DEG / 2.0, places=6)
+
+    def test_a_slow_jet_cannot_hold_a_climb(self):
+        # Already nose-high but out of energy: every candidate levels off.
+        cands = geo.candidate_actions(geo.V_MIN, 40.0, 0.0, "energy")
+        self.assertTrue(all(gamma <= 0.0 for _v, gamma, _psi in cands))
+
+    def test_a_slow_jet_can_still_dive(self):
+        cands = geo.candidate_actions(geo.V_MIN, 0.0, 0.0, "energy")
+        self.assertLess(min(gamma for _v, gamma, _psi in cands), 0.0)
+
+    def test_a_fast_jet_keeps_full_authority(self):
+        cands = geo.candidate_actions(300.0, 60.0, 0.0, "energy")
+        self.assertEqual(max(gamma for _v, gamma, _psi in cands),
+                         geo.GAMMA_LIMIT_DEG)
+
+    def test_legacy_climb_authority_is_untouched(self):
+        cands = geo.candidate_actions(geo.V_MIN, 65.0, 0.0)
+        self.assertEqual(max(gamma for _v, gamma, _psi in cands),
+                         geo.GAMMA_LIMIT_DEG)
+
+    def test_the_zoom_climb_is_self_limiting(self):
+        """Command the steepest climb at burner forever and never reach the lid.
+
+        The jet still climbs -- excess thrust is excess thrust -- but it settles
+        into the shallow angle its energy can sustain instead of holding 70 deg
+        on a speed floor.  Over a full episode that is the difference between
+        topping out at the 11 km ceiling and staying in the fight.
+        """
+        from dcs_bridge.sim_env import ARENA_Z
+
+        v, gamma, psi = 250.0, 0.0, 0.0
+        pos = [100_000.0, 100_000.0, 3_000.0]
+        peak_rate = 0.0
+        for step in range(400):  # one full episode at the default cap
+            v, gamma, psi = geo.candidate_actions(v, gamma, psi, "energy")[0]
+            before = pos[2]
+            pos = geo.step_point_mass(pos, [v, gamma, psi])
+            if step < 20:
+                peak_rate = max(peak_rate, pos[2] - before)
+            self.assertGreaterEqual(v, geo.V_MIN)
+        settled_rate = pos[2] - before
+        self.assertGreater(peak_rate, 20.0)          # it does zoom at first
+        self.assertLess(settled_rate, peak_rate / 2.0)  # then settles well below
+        self.assertLess(pos[2], ARENA_Z)             # and never reaches the lid
+
+    def test_without_the_limit_the_same_climb_hits_the_ceiling(self):
+        """Control: the old behavior (full authority at any speed) tops out."""
+        from dcs_bridge.sim_env import ARENA_Z
+
+        v, gamma, psi = 250.0, 0.0, 0.0
+        pos = [100_000.0, 100_000.0, 3_000.0]
+        for _ in range(400):
+            gamma = min(geo.GAMMA_LIMIT_DEG, gamma + 10.0)   # no energy check
+            v = geo.energy_step(v, gamma, 10.0, +1.0)
+            psi = geo.wrap_heading(psi + 10.0)
+            pos = geo.step_point_mass(pos, [v, gamma, psi])
+            if pos[2] >= ARENA_Z:
+                break
+        self.assertGreaterEqual(pos[2], ARENA_Z)
+
+
+class DepartureAttributionTest(unittest.TestCase):
+    def test_bandit_departure_is_neutral_and_named(self):
+        env = UCAVSimEnv(randomize=False, shaping=0.0, seed=1)
+        env.reset()
+        env.pos_b = [-10.0, 100_000.0, 3_000.0]   # bandit outside, agent inside
+        _obs, reward, done, info = env.step(4)
+        self.assertTrue(done)
+        self.assertEqual(info["outcome"], "bandit_departed")
+        self.assertEqual(reward, 0.0)
+
+    def test_agent_departure_still_costs_five(self):
+        env = UCAVSimEnv(randomize=False, shaping=0.0, seed=2)
+        env.reset()
+        env.pos_r = [-10.0, 100_000.0, 3_000.0]
+        _obs, reward, done, info = env.step(4)
+        self.assertTrue(done)
+        self.assertEqual(info["outcome"], "out_of_bounds")
+        self.assertEqual(reward, -5.0)
+
+    def test_agent_is_blamed_when_both_are_out(self):
+        env = UCAVSimEnv(randomize=False, shaping=0.0, seed=3)
+        env.reset()
+        env.pos_r = [-10.0, 100_000.0, 3_000.0]
+        env.pos_b = [-10.0, 100_000.0, 3_000.0]
+        _obs, reward, done, info = env.step(4)
+        self.assertEqual(info["outcome"], "out_of_bounds")
+        self.assertEqual(reward, -5.0)
+
+    def test_departed_reports_who(self):
+        env = UCAVSimEnv(randomize=False, shaping=0.0, seed=4)
+        env.reset()
+        self.assertIsNone(env._departed())
+        env.pos_b[2] = 50.0
+        self.assertEqual(env._departed(), "bandit")
+        env.pos_r[2] = 50.0
+        self.assertEqual(env._departed(), "agent")
+        self.assertTrue(env._out_of_bounds())

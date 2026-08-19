@@ -405,92 +405,52 @@ champion — it is losing better than 3:1 — while the self-play-trained one go
 **345 W / 128 L**. The scripted axes are flat within ±0.01 (noise at this
 sample size); the whole gain is against a capable opponent.
 
-**A hypothesis that only half held.** The energy action set was added on the
-theory that a mirror match cannot resolve without an energy game. Mirror
-engagements ending `out_of_bounds` instead of a kill:
-
-| | legacy action set | energy, lifted | energy, self-play trained |
-|---|---|---|---|
-| unresolved | 92% | 67% | **60%** |
-
-Better by a lot, but still a majority. Adding throttle and then training
-against an equal moved unresolved fights from 92% to 60% and no further, so
-the remaining cause is somewhere else — most likely the 200 km arena and
-400-step episode cap, which a pair of well-matched fighters can simply fly out
-of. That is the next thing to look at, not more action-space work.
-
-Note on the numbers below: `ace` was added as an attempt at a harder
-benchmark and did not turn out to be harder — the policy handled it at 0.99
-without ever having trained on it. Self-play is the benchmark that finally
-separated the policies, so it is the one to watch.
+**A hypothesis, falsified, and what it turned up.** The energy action set was
+added on the theory that a mirror match cannot resolve without an energy game.
+It helped — unresolved mirror fights fell from 92% to 60% — but a majority
+still ended `out_of_bounds`, so the README said the remaining cause was
+probably the 200 km arena. That was wrong, and easy to check: widening the
+arena to 2,000 km and quadrupling the episode cap changed the outcome
+distribution by *exactly zero episodes*. Breaking the departures down by which
+boundary was crossed said why —
 
 ```
-python -m dcs_bridge.train --episodes 2500 --opponent mixed --out checkpoints/ucav_policy.npz
+146  bandit hit the 11 km ceiling
+ 29  agent hit the ceiling
+  5  both
+  0  horizontal boundary       0  ground
 ```
 
-Two trained checkpoints are committed so the DCS addon works out of the box.
-Both are fine-tuned from the previous policy through a **rehearsal
-curriculum** (`--init` plus `--opponent mixed --mixed-weights ...`), which
-drills the weak axes while rehearsing the others so nothing is forgotten.
+Every unresolved fight was a zoom climb into the lid, and the *bandit* was
+departing five times more often than the agent. Two defects behind it:
 
-Greedy evaluation, **400 randomized engagements per behavior on each of three
-held-out seeds** never used for model selection (head-on merge ±30° heading,
-±800 m altitude offset, equal 250 m/s speeds); the table shows the mean over
-the three seeds. The self-play column is scored against a frozen copy of the
-*previous* shipped policy — the champion each was trained to beat.
+* **A hard speed floor makes a vertical climb free.** Clamping speed at
+  `V_MIN` let a point mass trade all its energy for altitude, bottom out, and
+  keep climbing at 120 m/s forever. Real jets run out and the nose falls, so
+  climb authority now scales from the full 70° at corner speed (200 m/s) down
+  to level flight at `V_MIN` (`geometry.max_climb_angle`). Descending is never
+  limited — unloading is how you get the energy back. The jet still climbs when
+  it has thrust to spare; it settles at the angle its energy sustains instead
+  of holding 70° on the floor.
+* **The agent was penalized for the bandit's departure.** `out_of_bounds` cost
+  −5 whenever *either* aircraft left the box, so in a self-play fight the agent
+  ate the penalty for something it does not control, five times out of six. The
+  environment now attributes it: `out_of_bounds` (−5) when the agent leaves,
+  `bandit_departed` (0.0) when only the bandit does. This applies to both action
+  sets; evaluation metrics are unaffected because neither outcome counts as a
+  win or a conversion.
 
-| Bandit behavior | previous policy | **`ucav_policy.npz`** (default) | `ucav_policy_robust.npz` |
-|---|---|---|---|
-| straight (classic profile) | 0.99 | **0.99** | 0.95 |
-| pursuit (turns to fight) | 0.94 | **0.98** | **0.99** |
-| evasive (breaks when threatened) | 1.00 | **1.00** | 0.96 |
-| ace (presses when winning, breaks when losing) | 0.98 | **1.00** | 0.99 |
-| mixed (randomized per episode) | 0.98 | **0.99** | 0.97 |
-| **self-play vs the previous policy** | 0.01 | **0.32** | **0.70** |
+Running the shipped energy policy unchanged under the corrected physics:
 
-Win = gun envelope (<2,500 m, own aspect <30°, bandit aspect >30°, altitude
-advantage); conversion = established in the bandit's rear hemisphere (own
-aspect <30°, bandit aspect >150°). Conversion rates track the win rates
-within 0.01–0.05 throughout and are omitted here for width; `--eval-episodes`
-prints both.
+| | before | after |
+|---|---|---|
+| ceiling / boundary departures | 60% | ~1% |
+| timeouts | 0% | 40% |
+| **resolved (win or loss)** | **40%** | **60%** |
 
-**Which one to fly.** `ucav_policy.npz` is the default because it is a strict
-improvement — no scripted axis regresses (straight-bandit *conversion* is the
-only cell that moves, 1.00 → 0.99) while pursuit gains 4 points and self-play
-gains 31. `ucav_policy_robust.npz` is the self-play-hardened alternative:
-`--checkpoint checkpoints/ucav_policy_robust.npz` trades ~4 points against
-straight-flying and evasive targets for **more than double** the win rate
-against an opponent as capable as itself. Fly the robust one against human
-players or capable DCS AI; fly the default against everything else.
-
-Two results here are worth stating plainly because they cut against the
-earlier numbers in this file:
-
-1. **The old policy was not as strong as its scores suggested.** It beat every
-   scripted bandit at 0.94–1.00, but a policy trained specifically against it
-   reached **0.89**, and the old policy scored **0.01 against a frozen copy of
-   itself** — 92% of those engagements ended with someone leaving the arena
-   rather than a resolution. High scores against hand-written opponents mostly
-   measured how predictable those opponents were.
-2. **There is a real frontier, not a free lunch.** Six curriculum arms were
-   run. Pure self-play reached 0.89 on that axis but forgot everything else
-   (pursuit 0.94 → 0.06). Heavier self-play weighting reached 0.71–0.73 but
-   always cost 3–5 points on straight and evasive, and additional rehearsal of
-   exactly those two behaviors did not buy them back. The default checkpoint
-   sits at the no-regression end of that frontier; the robust checkpoint sits
-   further along it, and both are shipped rather than pretending the trade-off
-   does not exist.
-
-What made the difference between the arm that regressed everywhere and the one
-that improved everywhere was not the idea but its dosage: self-play at 1/5 of
-episodes instead of 3/6, learning rate 0.02 instead of 0.05, and a
-best-checkpoint selection sample of 40 episodes instead of 12 (with five
-behaviors in the draw, 12 episodes selects mostly on noise — hence
-`--select-episodes`).
-
-Earlier revisions of this README described the equal-speed pure-pursuit fight
-as inherently near-unwinnable (a two-circle stalemate); that was wrong — it
-was a training gap, not a limit of the geometry.
+The remaining 40% are genuine stalemates — two equally matched fighters in a
+turning fight that neither converts — which is a real outcome rather than an
+artifact of the box.
 
 ## Repository layout
 

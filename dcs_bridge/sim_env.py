@@ -31,6 +31,7 @@ WIN_ASPECT = 30.0     # deg
 # 10 deg/step maneuver granularity so fights stay balanced and stable.
 BANDIT_TURN = 10.0    # deg/step max heading change
 BANDIT_GAMMA = 5.0    # deg/step max climb-angle change
+OUTCOMES = ("win", "loss", "out_of_bounds", "bandit_departed", "timeout")
 OPPONENTS = ("straight", "pursuit", "evasive", "ace", "selfplay", "mixed")
 # Behaviors a "mixed" episode may draw by default.  "selfplay" is deliberately
 # excluded: it needs a bandit policy, so it only enters a mixed draw when the
@@ -181,7 +182,9 @@ class UCAVSimEnv:
         turn = max(-BANDIT_TURN, min(BANDIT_TURN, geo.heading_error(desired_psi, psi_b)))
         psi_b = geo.wrap_heading(psi_b + turn)
         gamma_b = gamma_b + max(-BANDIT_GAMMA, min(BANDIT_GAMMA, desired_gamma - gamma_b))
-        gamma_b = max(-geo.GAMMA_LIMIT_DEG, min(geo.GAMMA_LIMIT_DEG, gamma_b))
+        up_limit = (geo.GAMMA_LIMIT_DEG if self.action_set == "legacy"
+                    else geo.max_climb_angle(v_b))
+        gamma_b = max(-geo.GAMMA_LIMIT_DEG, min(up_limit, gamma_b))
         if self.action_set != "legacy":
             # A reactive bandit runs full throttle and pays the same gravity and
             # induced-drag bill the agent does, so the energy fight is fair.
@@ -245,10 +248,18 @@ class UCAVSimEnv:
             reward -= 10.0
             self.done = True
             info["outcome"] = "loss"
-        elif self._out_of_bounds():
-            reward -= 5.0
+        elif self._departed():
+            # Attribute the departure.  Penalizing the agent because the
+            # *bandit* flew out of the box was scoring it for something it does
+            # not control -- and in a self-play fight the bandit departs five
+            # times more often than the agent does.
+            who = self._departed()
             self.done = True
-            info["outcome"] = "out_of_bounds"
+            if who == "bandit":
+                info["outcome"] = "bandit_departed"   # neutral: not our doing
+            else:
+                reward -= 5.0
+                info["outcome"] = "out_of_bounds"
         elif self.steps >= self.max_steps:
             reward -= 5.0
             self.done = True
@@ -256,13 +267,27 @@ class UCAVSimEnv:
 
         return self._obs(), reward, self.done, info
 
+    @staticmethod
+    def _outside(pos) -> bool:
+        if not (0.0 < pos[0] < ARENA_XY and 0.0 < pos[1] < ARENA_XY):
+            return True
+        return not (100.0 < pos[2] < ARENA_Z)
+
+    def _departed(self) -> Optional[str]:
+        """Who left the arena: ``"agent"``, ``"bandit"``, or ``None``.
+
+        The agent is reported whenever it is out, even if both are, since that
+        is the case it is responsible for.
+        """
+        if self._outside(self.pos_r):
+            return "agent"
+        if self._outside(self.pos_b):
+            return "bandit"
+        return None
+
     def _out_of_bounds(self) -> bool:
-        for pos in (self.pos_r, self.pos_b):
-            if not (0.0 < pos[0] < ARENA_XY and 0.0 < pos[1] < ARENA_XY):
-                return True
-            if not (100.0 < pos[2] < ARENA_Z):
-                return True
-        return False
+        """Back-compat: either aircraft outside the arena."""
+        return self._departed() is not None
 
     # ------------------------------------------------------------------ #
     def trajectory_header(self) -> List[str]:
