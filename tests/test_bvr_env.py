@@ -415,3 +415,60 @@ class TrainWiringTest(unittest.TestCase):
                                  engagement="bvr")
         self.assertGreaterEqual(survival, win)   # every win is also a survival
         self.assertLessEqual(survival, 1.0)
+
+
+class ThreatBearingTest(unittest.TestCase):
+    """The block must locate the threat, not merely announce it."""
+
+    def setUp(self):
+        self.env = BVRSimEnv(seed=40, randomize=False, shaping=0.0,
+                             opponent="straight")
+        self.env.reset()
+        self.env.act_r = [250.0, 0.0, 0.0]     # pointing north
+
+    def block(self):
+        return self.env._bvr_block(self.env.pos_r, self.env.act_r,
+                                   self.env.pos_b, self.env.act_b, "agent")
+
+    def _threat_at(self, offset):
+        pos = [self.env.pos_r[0] + offset[0], self.env.pos_r[1] + offset[1],
+               self.env.pos_r[2]]
+        m = bvr.Missile.launch(self.env.spec, "bandit", pos, [900.0, 0.0, 180.0])
+        m.active = True
+        self.env.in_flight.append(m)
+
+    def test_all_zero_when_nothing_is_inbound(self):
+        b = self.block()
+        self.assertEqual((b[12], b[13], b[14]), (0.0, 0.0, 0.0))
+
+    def test_a_threat_dead_ahead(self):
+        self._threat_at((0.0, 20_000.0))
+        b = self.block()
+        self.assertAlmostEqual(b[12], 0.0, places=6)   # no lateral component
+        self.assertAlmostEqual(b[13], 1.0, places=6)   # straight off the nose
+
+    def test_a_threat_on_the_right_and_on_the_left(self):
+        self._threat_at((20_000.0, 0.0))               # due east, we face north
+        self.assertAlmostEqual(self.block()[12], 1.0, places=6)
+        self.env.in_flight.clear()
+        self._threat_at((-20_000.0, 0.0))              # due west
+        self.assertAlmostEqual(self.block()[12], -1.0, places=6)
+
+    def test_notch_depth_is_zero_when_beaming_the_threat(self):
+        self._threat_at((0.0, 20_000.0))               # threat to the north
+        self.env.act_r = [250.0, 0.0, 90.0]            # we fly east: beaming it
+        self.assertAlmostEqual(self.block()[14], 0.0, places=6)
+
+    def test_notch_depth_is_one_when_hot_and_minus_one_when_cold(self):
+        self._threat_at((0.0, 20_000.0))
+        self.env.act_r = [250.0, 0.0, 0.0]             # straight at it
+        self.assertAlmostEqual(self.block()[14], 1.0, places=6)
+        self.env.act_r = [250.0, 0.0, 180.0]           # running from it
+        self.assertAlmostEqual(self.block()[14], -1.0, places=6)
+
+    def test_the_block_stays_inside_the_normalized_range(self):
+        self._threat_at((14_000.0, 14_000.0))
+        b = self.block()
+        self.assertEqual(b.shape, (BVR_STATE_DIM,))
+        self.assertTrue(np.all(np.isfinite(b)))
+        self.assertTrue(np.all(b >= -1.0) and np.all(b <= 1.0))

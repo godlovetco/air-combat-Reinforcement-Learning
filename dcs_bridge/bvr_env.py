@@ -42,7 +42,7 @@ MERGE_RANGE = 9_000.0     # m at which a BVR fight has become a dogfight
 CRANK_DEG = 50.0          # off-boresight a supporting shooter can hold
 NOTCH_ERROR_DEG = 12.0    # how precisely a scripted bandit can hold the beam
 
-BVR_STATE_DIM = 12
+BVR_STATE_DIM = 15
 OUTCOMES = ("win", "loss", "merge", "out_of_bounds", "bandit_departed", "timeout")
 
 
@@ -370,6 +370,29 @@ class BVRSimEnv:
         else:
             tti = 1.0
         rng_ratio = min(2.0, auth["range"] / max(auth["rmax"], 1.0)) / 2.0
+
+        # Where the threat actually is, and how deep in its notch we are.
+        # Without these the block says "a missile is inbound, N seconds out"
+        # and nothing about its bearing -- and a notch is a maneuver *relative
+        # to the threat*, so a policy given only the first two facts cannot
+        # learn to fly one. That omission, not the hyper-parameters, is why the
+        # first trained BVR policies lost to a twenty-line scripted timeline.
+        if threats:
+            t_pos = threats[0].pos
+            bearing = geo.wrap_heading(math.degrees(math.atan2(
+                t_pos[0] - own_pos[0], t_pos[1] - own_pos[1])))
+            off = math.radians(geo.heading_error(bearing, own_act[2]))
+            threat_sin, threat_cos = math.sin(off), math.cos(off)
+            # Our own velocity along the line of sight to the threat,
+            # normalized and signed so +1 is flying straight at it and -1 is
+            # running from it.  Zero is exactly the Doppler notch -- the
+            # seeker judges the same quantity from its end, where only the
+            # magnitude matters.
+            notch_depth = max(-1.0, min(1.0, bvr.radial_speed(
+                own_pos, t_pos, own_act) / max(own_act[0], 1.0)))
+        else:
+            threat_sin = threat_cos = notch_depth = 0.0
+
         return np.array([
             1.0 if self._lock(who) else 0.0,
             1.0 if self._spiked(who) else 0.0,
@@ -383,6 +406,9 @@ class BVRSimEnv:
             1.0 if auth["in_envelope"] else 0.0,
             1.0 if auth["in_nez"] else 0.0,
             rng_ratio,
+            threat_sin,
+            threat_cos,
+            notch_depth,
         ])
 
     def _obs_for(self, own_pos, own_act, tgt_pos, tgt_act, who: str) -> np.ndarray:
