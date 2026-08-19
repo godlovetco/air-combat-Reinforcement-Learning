@@ -516,3 +516,55 @@ class BVRSimEnv:
 
     def trajectory_row(self) -> List[float]:
         return [*self.pos_r, *self.pos_b]
+
+
+def wso_situation(env: "BVRSimEnv", who: str = "agent") -> dict:
+    """The ``sit["bvr"]`` block a WSO advisor reads, for one side of a fight.
+
+    This is the bridge between the simulated engagement and
+    :class:`dcs_bridge.wso.WSOAdvisor`: everything a back-seater would call out
+    over the intercom, in the units they would call it in.  Keeping it here
+    rather than in ``wso.py`` means the advisor stays free of any dependency on
+    the BVR model and does nothing at all when the block is absent.
+    """
+    other = "bandit" if who == "agent" else "agent"
+    own_pos = env.pos_r if who == "agent" else env.pos_b
+    own_act = env.act_r if who == "agent" else env.act_b
+    tgt_pos = env.pos_b if who == "agent" else env.pos_r
+    tgt_act = env.act_b if who == "agent" else env.act_r
+
+    wez = bvr.weapon_engagement_zone(env.spec_of(who), own_pos, own_act,
+                                     tgt_pos, tgt_act)
+    their = bvr.weapon_engagement_zone(env.spec_of(other), tgt_pos, tgt_act,
+                                       own_pos, own_act)
+
+    threat = None
+    incoming = [m for m in env._shots(other) if m.alive]
+    if incoming:
+        m = incoming[0]
+        _los, d = bvr.line_of_sight(m.pos, own_pos)
+        bearing = geo.wrap_heading(math.degrees(math.atan2(
+            m.pos[0] - own_pos[0], m.pos[1] - own_pos[1])))
+        threat = {
+            "bearing_deg": bearing,
+            "off_nose_deg": geo.heading_error(bearing, own_act[2]),
+            "range_m": d,
+            "seconds": d / max(m.speed, 1.0),
+            "active": m.active,
+            "coasting": m.coasting,
+            "notch_depth": max(-1.0, min(1.0, bvr.radial_speed(
+                own_pos, m.pos, own_act) / max(own_act[0], 1.0))),
+        }
+
+    mine = env._shots(who)
+    supported = [m for m in mine if not m.active]
+    return {
+        "locked": env._lock(who),
+        "spiked": env._spiked(who),
+        "threat": threat,
+        "wez": {**wez.as_dict(), "threatened": their.in_envelope},
+        "missiles": env.missiles_r if who == "agent" else env.missiles_b,
+        "shot_in_flight": bool(mine),
+        "support_owed_s": (supported[0].time_to_active(tgt_pos)
+                           if supported else 0.0),
+    }

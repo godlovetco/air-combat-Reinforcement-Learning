@@ -38,6 +38,11 @@ LOW_ALT_M = 300.0       # AGL-ish floor for a "altitude!" call
 THREAT_RANGE = 5_000.0  # m, bandit nose-on inside this = spike
 MERGE_RANGE = 2_500.0   # m, break-now range
 
+# BVR thresholds.  A missile fight is a timeline, so these are mostly seconds.
+DEFEND_SECONDS = 25.0   # time-to-impact inside which "defend" outranks anything
+NOTCH_TOLERANCE = 0.25  # |notch depth| under this counts as in the notch
+CRANK_DEG = 50.0        # off-boresight a supporting shooter can hold
+
 
 def _turn_word(heading_error_deg: float, lang: str) -> str:
     """'right'/'left' (or Korean) for a signed heading error to the target."""
@@ -57,6 +62,12 @@ def _pitch_word(gamma_deg: float, lang: str) -> str:
 
 def _heading_error(target_deg: float, current_deg: float) -> float:
     return (target_deg - current_deg + 180.0) % 360.0 - 180.0
+
+
+def _clock(off_nose_deg: float) -> int:
+    """Signed off-nose angle to a clock position, the way a WSO calls it."""
+    hour = int(round(off_nose_deg / 30.0)) % 12
+    return 12 if hour == 0 else hour
 
 
 class WSOAdvisor:
@@ -81,6 +92,15 @@ class WSOAdvisor:
         "maneuver": 4.0,
         "bra": 10.0,
         "station": 12.0,
+        # BVR
+        "defend": 3.0,
+        "notch": 4.0,
+        "pitbull": 8.0,
+        "support": 6.0,
+        "shoot": 5.0,
+        "in_wez": 10.0,
+        "winchester": 45.0,
+        "rwr": 12.0,
     }
 
     def __init__(self, lang: str = "ko"):
@@ -162,6 +182,12 @@ class WSOAdvisor:
                              else f"In range, {rng/1000:.0f} k, keep the pipper on."),
                             False))
 
+        # 3.x - the BVR timeline.  A missile fight is decided by seconds and
+        # geometry rather than by pipper placement, so these calls sit between
+        # the defensive ones and the energy advice: defending against a guiding
+        # missile outranks everything except flying into the ground.
+        out.extend(self._bvr_calls(sit, ko))
+
         # 4 - energy / corner
         if bank > 60.0:
             if tas < LOW_ENERGY_MS:
@@ -206,6 +232,98 @@ class WSOAdvisor:
                 out.append((8, "station",
                             ("편대 위치 이탈, 대형 좁혀." if ko
                              else "Off station, tighten the formation."), False))
+        return out
+
+    # ------------------------------------------------------------------ #
+    def _bvr_calls(self, sit: dict, ko: bool
+                   ) -> List[Tuple[float, str, str, bool]]:
+        """Calls for the missile fight: defend, notch, support, shoot.
+
+        Driven by a ``sit["bvr"]`` block -- see
+        :func:`dcs_bridge.bvr_env.wso_situation`.  Absent, this is a no-op and
+        the advisor behaves exactly as it did before, which is what a gun-only
+        setup should see.
+        """
+        bvr = sit.get("bvr")
+        if not bvr:
+            return []
+        out: List[Tuple[float, str, str, bool]] = []
+
+        threat = bvr.get("threat")
+        if threat is not None and threat.get("active"):
+            secs = float(threat.get("seconds", 99.0))
+            off = float(threat.get("off_nose_deg", 0.0))
+            depth = float(threat.get("notch_depth", 1.0))
+            clock = _clock(off)
+            side = _turn_word(-off, self.lang)  # turn the shortest way to the beam
+            if abs(depth) <= NOTCH_TOLERANCE:
+                # Already in the notch: the only advice is to keep it there.
+                out.append((1.5, "notch",
+                            (f"노치 유지, {secs:.0f}초. 그대로." if ko
+                             else f"In the notch — hold it, {secs:.0f} seconds."),
+                            False))
+            elif secs <= DEFEND_SECONDS:
+                out.append((1.5, "defend",
+                            (f"디펜드! {clock}시 미사일, {side} 노치, {secs:.0f}초!" if ko
+                             else f"Defend! Missile {clock} o'clock — notch {side}, "
+                                  f"{secs:.0f} seconds!"),
+                            False))
+            else:
+                out.append((2.5, "notch",
+                            (f"{clock}시 미사일 유도 중, {side} 노치 준비." if ko
+                             else f"Missile guiding {clock} o'clock — set up the "
+                                  f"notch {side}."),
+                            False))
+        elif bvr.get("spiked"):
+            wez = bvr.get("wez") or {}
+            rng_km = float(wez.get("range", 0.0)) / 1000.0
+            out.append((2.6, "rwr",
+                        (f"스파이크, {rng_km:.0f}킬로. 상대 사거리 안." if ko
+                         else f"Spiked at {rng_km:.0f} k — you are in his range.")
+                        if wez.get("threatened") else
+                        (f"스파이크, {rng_km:.0f}킬로." if ko
+                         else f"Spiked at {rng_km:.0f} k."),
+                        False))
+
+        # Our own shot: it needs the radar until the seeker takes over.
+        owed = float(bvr.get("support_owed_s", 0.0))
+        if bvr.get("shot_in_flight"):
+            if owed <= 0.0:
+                out.append((3.2, "pitbull",
+                            ("핏불. 기동 자유." if ko
+                             else "Pitbull — you're free to maneuver."), False))
+            else:
+                keep = "락 유지" if ko else "hold the lock"
+                out.append((3.4, "support",
+                            (f"서포트 {owed:.0f}초, {keep}, 크랭크 {CRANK_DEG:.0f}도." if ko
+                             else f"Support {owed:.0f} seconds — {keep}, crank "
+                                  f"{CRANK_DEG:.0f} degrees."), False))
+
+        # Employment.
+        wez = bvr.get("wez") or {}
+        rounds = int(bvr.get("missiles", 0))
+        if rounds <= 0 and not bvr.get("shot_in_flight"):
+            # Only once the last round is also off the rail *and* out of the
+            # air.  Repeating "recommend separate" every cooldown while a shot
+            # is still guiding is chatter, and chatter is how a back-seater
+            # gets tuned out.
+            out.append((4.5, "winchester",
+                        ("윈체스터. 이탈 권고." if ko
+                         else "Winchester — recommend separate."), False))
+        elif bvr.get("locked") and wez.get("in_nez"):
+            out.append((3.6, "shoot",
+                        (f"NEZ 안, {float(wez['range'])/1000:.0f}킬로. 발사, 발사." if ko
+                         else f"In the no-escape zone at "
+                              f"{float(wez['range'])/1000:.0f} k — shoot, shoot."),
+                        False))
+        elif bvr.get("locked") and wez.get("in_envelope"):
+            out.append((3.8, "in_wez",
+                        (f"사거리 안이지만 회피 가능, "
+                         f"{float(wez['range'])/1000:.0f}킬로. NEZ까지 대기 권고." if ko
+                         else f"In range but he can run — "
+                              f"{float(wez['range'])/1000:.0f} k. Recommend hold "
+                              f"for the no-escape zone."),
+                        False))
         return out
 
     # ------------------------------------------------------------------ #
