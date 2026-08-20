@@ -1,0 +1,38 @@
+# Example UCAV AI Pilot configuration.
+#
+# Copy to `ucav_pilot.toml`, edit, and run:
+#     ucav-pilot --config ucav_pilot.toml
+#
+# Keys are the long CLI option names with dashes as underscores. Any command-
+# line flag you also pass overrides the value here. Section headers ([...]) are
+# optional and purely for readability.
+
+[pilot]
+checkpoint    = "checkpoints/ucav_policy.npz"
+weapons       = false          # allow gun-envelope trigger pulls
+target_speed  = 250.0          # m/s the throttle loop holds
+
+[link]
+telemetry_port = 7778
+command_port   = 7779
+dcs_host       = "127.0.0.1"
+
+[cca]
+# formation   = "combat_spread"   # uncomment to fly loyal-wingman on the lead
+formation_side = "right"
+leash          = "tight"          # close | tight | loose
+
+[radio]
+radio       = false            # LLM/voice radio wingman (Pro)
+radio_lang  = "ko-KR"
+
+[wso]
+wso       = false              # back-seat text advisory
+wso_lang  = "ko"
+
+[license]
+# license_key = "UCAV1.xxxx.yyyy"   # Pro key (unlocks the LLM features)
+
+[logging]
+log_level = "INFO"             # DEBUG | INFO | WARNING | ERROR
+# log_file = ""                # empty = console only

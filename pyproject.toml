@@ -1,0 +1,51 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ucav-ai-pilot"
+description = "AI pilot addon for DCS World: RL air-combat agent, LLM radio wingman, CCA loyal-wingman teaming, and WSO advisory."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { file = "LICENSE" }
+authors = [{ name = "UCAV AI Pilot" }]
+keywords = ["DCS", "flight-simulator", "reinforcement-learning", "air-combat", "AI-pilot", "CCA", "MUM-T"]
+dynamic = ["version"]
+# tomli backports stdlib tomllib for the --config file on Python 3.9/3.10.
+dependencies = ["numpy>=1.20", "tomli>=2.0; python_version < '3.11'"]
+
+[project.optional-dependencies]
+# Paid "Pro" tier: the Claude-powered radio wingman and WSO advisor.
+radio = ["anthropic>=0.40"]
+# Voice I/O for the radio (offline TTS + speech recognition).
+voice = ["SpeechRecognition>=3.10", "pyttsx3>=2.90"]
+# Post-flight validation plots.
+plots = ["matplotlib>=3.5"]
+# Development: a Lua interpreter, so the DCS export script can be run against
+# a stubbed DCS API in the test suite.  Not needed at runtime -- DCS brings its
+# own Lua -- but without it the highest-risk interface in the product is
+# covered by nothing.
+dev = ["lupa>=2.0"]
+# Everything, for a full local install.
+all = ["anthropic>=0.40", "SpeechRecognition>=3.10", "pyttsx3>=2.90", "matplotlib>=3.5"]
+
+[project.urls]
+Homepage = "https://github.com/godlovetco/air-combat-Reinforcement-Learning"
+Source = "https://github.com/godlovetco/air-combat-Reinforcement-Learning"
+Changelog = "https://github.com/godlovetco/air-combat-Reinforcement-Learning/blob/master/CHANGELOG.md"
+
+[project.scripts]
+ucav-pilot = "dcs_bridge.run_pilot:main"
+ucav-install = "dcs_bridge.install:main"
+ucav-train = "dcs_bridge.train:main"
+ucav-license = "dcs_bridge.licensing:_main"
+ucav-support = "dcs_bridge.support:main"
+
+[tool.setuptools]
+packages = ["dcs_bridge"]
+
+[tool.setuptools.dynamic]
+version = { attr = "dcs_bridge.__version__" }
+
+[tool.setuptools.package-data]
+dcs_bridge = ["py.typed"]

@@ -1,0 +1,81 @@
+UCAV AI PILOT — END USER LICENSE AGREEMENT (EULA)
+
+Copyright (c) 2026 UCAV AI Pilot. All rights reserved.
+
+This is a commercial software product. This Agreement is a legal contract
+between you (the "Licensee") and the copyright holder (the "Vendor") for the
+UCAV AI Pilot software, its Lua export addon, trained model checkpoints,
+documentation, and related materials (collectively, the "Software"). By
+installing, copying, activating a license key for, or otherwise using the
+Software, you agree to be bound by this Agreement. If you do not agree, do
+not install or use the Software.
+
+NOTE: This file is a proprietary-license template for the product. Before a
+commercial release, the Vendor should replace the placeholder copyright
+holder and jurisdiction with its own legal entity and have the terms
+reviewed by qualified counsel. It is not legal advice.
+
+1. LICENSE GRANT
+   Subject to your compliance with this Agreement and, for paid editions,
+   payment of the applicable fees, the Vendor grants you a personal,
+   non-exclusive, non-transferable, revocable license to install and use the
+   Software on computers you own or control, solely for your own use with
+   Digital Combat Simulator (DCS World). A TRIAL edition may be used without
+   a key with reduced functionality; paid features are unlocked by a valid
+   license key issued by the Vendor.
+
+2. RESTRICTIONS
+   You may not, except to the extent applicable law expressly permits:
+   (a) sell, rent, lease, sublicense, distribute, publish, or otherwise make
+       the Software available to any third party;
+   (b) copy the Software except for a single backup, or share, publish, or
+       resell license keys;
+   (c) reverse engineer, decompile, or disassemble the Software, or attempt
+       to derive its source code or the license-key signing secret, or
+       circumvent, disable, or forge its licensing or activation mechanisms;
+   (d) modify, adapt, or create derivative works of the Software, or remove
+       or alter any proprietary notices;
+   (e) use the Software to develop a competing product.
+
+3. OWNERSHIP
+   The Software is licensed, not sold. The Vendor retains all right, title,
+   and interest in and to the Software, including all intellectual property
+   rights. No rights are granted except as expressly set out here.
+
+4. INTENDED USE
+   The Software is an add-on for the DCS World consumer flight-simulation
+   video game and is provided for entertainment and simulation use only. It
+   does not control, and is not intended to control, any real aircraft,
+   weapon, or physical system. You are responsible for using it in
+   compliance with the DCS World terms of use and all applicable laws.
+
+5. THIRD-PARTY COMPONENTS
+   The Software may use third-party libraries (e.g., NumPy) under their own
+   licenses; those licenses govern those components. Optional AI features
+   may call third-party AI services subject to their separate terms, and any
+   associated usage fees are your responsibility.
+
+6. TERM AND TERMINATION
+   This Agreement is effective until terminated. It terminates automatically
+   if you breach it. On termination you must stop using and delete all copies
+   of the Software. Sections 2, 3, 7, 8, and 9 survive termination.
+
+7. DISCLAIMER OF WARRANTY
+   THE SOFTWARE IS PROVIDED "AS IS" WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+   IMPLIED, INCLUDING WITHOUT LIMITATION THE WARRANTIES OF MERCHANTABILITY,
+   FITNESS FOR A PARTICULAR PURPOSE, AND NON-INFRINGEMENT.
+
+8. LIMITATION OF LIABILITY
+   TO THE MAXIMUM EXTENT PERMITTED BY LAW, IN NO EVENT SHALL THE VENDOR BE
+   LIABLE FOR ANY INDIRECT, INCIDENTAL, SPECIAL, CONSEQUENTIAL, OR PUNITIVE
+   DAMAGES, OR FOR ANY LOSS OF PROFITS OR DATA, ARISING OUT OF OR RELATED TO
+   THE SOFTWARE. THE VENDOR'S TOTAL LIABILITY SHALL NOT EXCEED THE AMOUNT YOU
+   PAID FOR THE SOFTWARE.
+
+9. GENERAL
+   This Agreement is the entire agreement between the parties regarding the
+   Software and supersedes any prior agreements. If any provision is held
+   unenforceable, the remaining provisions remain in effect. The Vendor's
+   failure to enforce any right is not a waiver.
+
+For licensing inquiries, contact the Vendor.

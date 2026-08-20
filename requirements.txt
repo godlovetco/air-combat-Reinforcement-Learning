@@ -1,0 +1,8 @@
+numpy>=1.24
+anthropic>=0.90          # LLM radio wingman (python -m dcs_bridge.run_pilot --radio)
+
+# Optional voice I/O for the radio wingman (console text works without these):
+# SpeechRecognition>=3.10   # microphone speech-to-text
+# openai-whisper            # offline STT backend for SpeechRecognition
+# pyaudio                   # microphone access for SpeechRecognition
+# pyttsx3>=2.90             # offline text-to-speech (Windows SAPI voices)
